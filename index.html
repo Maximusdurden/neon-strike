@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Neon Strike</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <!-- Three.js canvas mounts here -->
+  <div id="app"></div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="crosshair">
+      <div class="ch-line ch-h"></div>
+      <div class="ch-line ch-v"></div>
+    </div>
+
+    <!-- Sniper scope overlay -->
+    <div id="scope" class="hidden">
+      <div class="scope-ring"></div>
+      <div class="scope-cross scope-cross-h"></div>
+      <div class="scope-cross scope-cross-v"></div>
+      <div class="scope-dot"></div>
+    </div>
+
+    <div id="top-left">
+      <div id="health-bar"><div id="health-fill"></div></div>
+      <div id="health-text">100</div>
+    </div>
+
+    <div id="top-right">
+      <div id="ammo">30 / 90</div>
+      <div id="weapon-name">RIFLE</div>
+      <div id="weapon-slots">
+        <span class="slot" data-w="rifle">1</span>
+        <span class="slot" data-w="smg">2</span>
+        <span class="slot" data-w="shotgun">3</span>
+        <span class="slot" data-w="sniper">4</span>
+        <span class="slot slot-melee" data-w="knife">5</span>
+        <span class="slot slot-melee" data-w="machete">6</span>
+      </div>
+    </div>
+
+    <div id="kill-feed"></div>
+
+    <!-- Mission objective -->
+    <div id="objective">
+      <div id="objective-label">OBJECTIVE</div>
+      <div id="objective-text"></div>
+    </div>
+
+    <!-- Infection counter -->
+    <div id="infection-counter" class="hidden">
+      <span id="infection-icon">☣</span>
+      <span id="infection-count">0</span> INFECTED
+    </div>
+
+    <!-- Mission banner -->
+    <div id="banner" class="hidden">
+      <div id="banner-title"></div>
+      <div id="banner-sub"></div>
+    </div>
+
+    <!-- Hide countdown -->
+    <div id="hide-countdown" class="hidden">
+      <div id="hide-title">HIDE!</div>
+      <div id="hide-timer">15</div>
+      <div id="hide-sub">Find cover before the deathmatch begins</div>
+    </div>
+
+    <div id="minimap-wrap">
+      <canvas id="minimap" width="160" height="160"></canvas>
+    </div>
+
+    <!-- Pickup badge flash -->
+    <div id="pickup-badge" class="hidden"></div>
+
+    <!-- Stamina bar -->
+    <div id="stamina-wrap">
+      <div id="stamina-fill"></div>
+    </div>
+
+    <div id="bottom-center">
+      <div id="hitmarker" class="hidden">✕</div>
+      <div id="hit-flash"></div>
+      <div id="damage-vignette"></div>
+    </div>
+
+    <div id="score">SCORE <span id="score-val">0</span></div>
+
+    <div id="mobile-controls" class="hidden">
+      <div id="joy-zone">
+        <div id="joy-base"><div id="joy-knob"></div></div>
+      </div>
+      <div id="btn-fire">FIRE</div>
+      <div id="btn-jump">JUMP</div>
+      <div id="btn-reload">R</div>
+    </div>
+  </div>
+
+  <!-- Menu -->
+  <div id="menu">
+    <h1>NEON STRIKE</h1>
+    <p class="subtitle">A procedural 3D shooter</p>
+    <div id="menu-buttons">
+      <button id="btn-start">START</button>
+      <button id="btn-music">MUSIC: ON</button>
+      <button id="btn-sfx">SFX: ON</button>
+    </div>
+    <p class="hint">WASD move · Mouse look · Click fire · Shift sprint · Space jump · R reload · 1-4 / scroll switch weapons</p>
+    <p class="hint mobile-hint">Touch: left joystick to move, drag right to look, FIRE to shoot</p>
+  </div>
+
+  <!-- Game over -->
+  <div id="gameover" class="hidden">
+    <h2 id="gameover-title">YOU DIED</h2>
+    <div id="gameover-reason" class="hidden"></div>
+    <div id="final-score">SCORE: 0</div>
+    <div id="final-kills">KILLS: 0</div>
+    <button id="btn-restart">PLAY AGAIN</button>
+  </div>
+
+  <!-- Pause -->
+  <div id="pause" class="hidden">
+    <h2>PAUSED</h2>
+    <button id="btn-resume">RESUME</button>
+  </div>
+
+  <script type="module" src="js/main.js?v=20260929p"></script>
+</body>
+</html>
