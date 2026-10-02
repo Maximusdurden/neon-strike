@@ -2,7 +2,7 @@
 // No waves. The map population grows steadily, and the infection spreads
 // among them. Major population milestones are called out on the banner.
 
-import { CONFIG } from './config.js';
+import { CONFIG } from './config.js?v=20261002c';
 
 export class Story {
   constructor(game) {
@@ -19,7 +19,7 @@ export class Story {
   start() {
     this.lastMilestone = 0;
     this._calledInfection = false;
-    this._showBanner('THE CITY AWAITS', 'NPCs are trickling in. Blend in and find the infected.');
+      this._showBanner('BLACKWOOD RIDGE', 'Deep cover. The Weave is here. Blend in and find The Vector.');
   }
 
   // Called when the player kills a bot.
@@ -37,13 +37,13 @@ export class Story {
 
     if (milestone > this.lastMilestone && alive >= this.milestoneStep) {
       this.lastMilestone = milestone;
-      this._showBanner(`${milestone} NPCS ON THE MAP`, 'The city is filling up. Stay sharp.');
+          this._showBanner(`${milestone} RESIDENTS ON THE GRID`, 'The neighborhood is filling up. Stay sharp.');
     }
 
     // Call out the first infection when it appears.
     if (infected > 0 && !this._calledInfection) {
       this._calledInfection = true;
-      this._showBanner('THE OTHER IS HERE', 'One of them is infected. Find it before it spreads.');
+          this._showBanner('THE VECTOR IS HERE', 'One of them is Threaded. Find it before it spreads.');
     }
   }
 

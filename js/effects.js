@@ -1,7 +1,7 @@
 // Particles, explosions, impact sparks, deduction FX, and screen shake.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
+import { CONFIG } from './config.js?v=20261002c';
 
 export class Effects {
   constructor(scene) {

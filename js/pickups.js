@@ -1,7 +1,7 @@
 // Health, ammo, melee weapon pickups, and enemy drops.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
+import { CONFIG } from './config.js?v=20261002c';
 
 export class Pickups {
   constructor(scene, world, audio, onPickup) {
@@ -29,6 +29,20 @@ export class Pickups {
       shotgun: new THREE.MeshStandardMaterial({ color: 0x4a3a2a, metalness: 0.5, roughness: 0.5 }),
       sniper: new THREE.MeshStandardMaterial({ color: 0x1a2a3a, metalness: 0.7, roughness: 0.3 }),
     };
+    // Perk pickup materials (distinct colors per perk)
+    this.perkMats = {
+      sixthSense: new THREE.MeshStandardMaterial({ color: 0x00e5ff, emissive: 0x00e5ff, emissiveIntensity: 0.5 }),
+      thermal: new THREE.MeshStandardMaterial({ color: 0xff2d78, emissive: 0xff2d78, emissiveIntensity: 0.5 }),
+      softSoles: new THREE.MeshStandardMaterial({ color: 0x9b9bff, emissive: 0x9b9bff, emissiveIntensity: 0.5 }),
+      adrenaline: new THREE.MeshStandardMaterial({ color: 0xffd166, emissive: 0xffd166, emissiveIntensity: 0.5 }),
+    };
+    // Beam colors matching each perk so the light column reads as the same item.
+    this.perkBeamColors = {
+      sixthSense: 0x00e5ff,
+      thermal: 0xff2d78,
+      softSoles: 0x9b9bff,
+      adrenaline: 0xffd166,
+    };
   }
 
   spawnAll() {
@@ -44,6 +58,10 @@ export class Pickups {
       for (let i = 0; i < count; i++) {
         this.spawnWeaponPickup(key);
       }
+    }
+    // Spawn the four sensory perks (one of each, hidden in the environment).
+    for (const key of ['sixthSense', 'thermal', 'softSoles', 'adrenaline']) {
+      this.spawnPerkPickup(key);
     }
   }
 
@@ -180,6 +198,37 @@ export class Pickups {
     });
   }
 
+  // Spawn a sensory perk pickup (Sixth Sense, Thermal, Soft Soles, Adrenaline).
+  // Perks are hidden in the environment — car trunks, closets, dressers,
+  // cabinets, crates — so they read as physical discoveries, not baseline
+  // abilities. They use a small glowing capsule mesh with a colored beam.
+  spawnPerkPickup(key) {
+    let x, z, attempts = 0;
+    const rnd = this.world._rand || Math.random;
+    do {
+      x = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
+      z = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
+      attempts++;
+    } while (this.world.collides(x, z, 0.6) && attempts < 50);
+
+    const mat = this.perkMats[key] || this.healthMat;
+    const geo = new THREE.CapsuleGeometry(0.18, 0.35, 6, 12);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, 1.2, z);
+    mesh.castShadow = true;
+    this.scene.add(mesh);
+
+    this.pickups.push({
+      type: 'perk',
+      perkKey: key,
+      mesh,
+      beam: this._addBeam(x, z, this.perkBeamColors[key] || 0xffffff),
+      pos: new THREE.Vector3(x, 1.2, z),
+      active: true,
+      respawnTimer: 0,
+    });
+  }
+
   // Drop an item at a position (used when a bot dies).
   dropAt(pos, type) {
     const mat = type === 'health' ? this.healthMat : this.ammoMat;
@@ -237,6 +286,11 @@ export class Pickups {
           const picked = weapon.pickupWeapon(p.weaponKey);
           if (!picked) continue; // already own it, leave it
           label = CONFIG.weapons[p.weaponKey].name + ' ACQUIRED';
+        } else if (p.type === 'perk') {
+          // Sensory perk discovered in the environment.
+          const gained = player.addPerk(p.perkKey);
+          if (!gained) continue; // already own it, leave it
+          label = this._perkLabel(p.perkKey);
         }
         this.audio.pickup();
         if (this.onPickup && label) this.onPickup(label);
@@ -248,6 +302,17 @@ export class Pickups {
     }
   }
 
+  // Friendly HUD label for a discovered sensory perk.
+  _perkLabel(key) {
+    switch (key) {
+      case 'sixthSense': return 'SIXTH SENSE ACQUIRED — NEURAL RADAR ONLINE';
+      case 'thermal': return 'THERMAL SCANNER ACQUIRED — MICRO-TELLS VISIBLE';
+      case 'softSoles': return 'SOFT SOLES ACQUIRED — FOOTSTEPS HALVED';
+      case 'adrenaline': return 'ADRENALINE SYRINGE — SPRINT BOOSTED';
+      default: return 'PERK ACQUIRED';
+    }
+  }
+
   dispose() {
     this.healthMat.dispose();
     this.ammoMat.dispose();
@@ -255,5 +320,6 @@ export class Pickups {
     this.macheteMat.dispose();
     this.handleMat.dispose();
     Object.values(this.gunMats).forEach((m) => m.dispose());
+    Object.values(this.perkMats).forEach((m) => m.dispose());
   }
 }

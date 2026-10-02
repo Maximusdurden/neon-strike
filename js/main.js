@@ -1,18 +1,19 @@
 // Main game class: renderer, loop, state management, wiring.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js?v=20261001i';
-import { World } from './world.js?v=20261001i';
-import { Player } from './player.js?v=20261001i';
-import { Weapon } from './weapons.js?v=20261001i';
-import { Bots } from './bots.js?v=20261001i';
-import { Pickups } from './pickups.js?v=20261001i';
-import { Effects } from './effects.js?v=20261001i';
-import { AudioManager } from './audio.js?v=20261001i';
-import { UI } from './ui.js?v=20261001i';
-import { Story } from './story.js?v=20261001i';
-import { Keybinds } from './keybinds.js?v=20261001i';
-import { NetworkManager } from './network.js?v=20261001i';
+import { ASSET_VERSION } from './version.js';
+import { CONFIG } from './config.js?v=20261002c';
+import { World } from './world.js?v=20261002c';
+import { Player } from './player.js?v=20261002c';
+import { Weapon } from './weapons.js?v=20261002c';
+import { Bots } from './bots.js?v=20261002c';
+import { Pickups } from './pickups.js?v=20261002c';
+import { Effects } from './effects.js?v=20261002c';
+import { AudioManager } from './audio.js?v=20261002c';
+import { UI } from './ui.js?v=20261002c';
+import { Story } from './story.js?v=20261002c';
+import { Keybinds } from './keybinds.js?v=20261002c';
+import { NetworkManager } from './network.js?v=20261002c';
 
 export class Game {
   constructor() {
@@ -39,6 +40,22 @@ export class Game {
     // Tagging economy: cooldown prevents spamming every civilian.
     this.lastTagTime = -999;
     this.tagCooldown = 2.5; // seconds between suspect verifications
+
+    // Pressure scoring & Black-Box Uplink multiplier beacons.
+    this.scoreMultiplier = 1;
+    this._scoreAccum = 0;          // fractional carry for whole-point scoring
+    this.multiplierTimer = 0;      // seconds remaining of the active multiplier
+    this.highestTierUnlocked = 1;  // 1 = no multiplier yet; unlocks 2x, 3x, 4x, 5x
+    this.uplinkActive = false;     // a beacon is currently spawned
+    this.uplinkTimer = 0;          // seconds until the beacon despawns
+    this.uplinkCooldown = 0;       // seconds until the next beacon can spawn
+    this.uplinkPos = null;         // THREE.Vector3 of the live beacon
+    this.uplinkTier = 0;           // multiplier value of the live beacon
+    this.uplinkMesh = null;        // THREE.Mesh of the beacon pillar
+
+    // Stadium floodlights + circuit breaker hold charge.
+    this.stadiumLightsActive = false;
+    this._breakerHold = 0;
 
     // Starting NPC population (adjustable via the options slider).
     this.startingNPCs = CONFIG.startingNPCs;
@@ -150,6 +167,19 @@ export class Game {
       }
     });
 
+    // Flashlight toggle (KeyF) — works during play and hide phases.
+    // Shares the interact key: a tap toggles the beam, while holding it at the
+    // stadium breaker charges the grid (handled in _update). Suppressed at the
+    // breaker so charging the grid doesn't also switch the beam on.
+    document.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      if (e.code !== this.keybinds.get('interact')) return;
+      if (this.state !== 'playing' && this.state !== 'hiding') return;
+      if (this.world.isAtBreaker(this.player.pos)) return;
+      this.player.toggleFlashlight();
+      this.audio.pickup();
+    });
+
     document.addEventListener('mousemove', (e) => {
       if (this.state !== 'playing' && this.state !== 'hiding') return;
       this.input.mouseDX += e.movementX;
@@ -201,6 +231,21 @@ export class Game {
     this._reviveProgress = 0;
     this._huntStarted = false;
     this._hadInfection = false;
+    // Reset pressure scoring & uplink state.
+    this.scoreMultiplier = 1;
+    this._scoreAccum = 0;
+    this.multiplierTimer = 0;
+    this.highestTierUnlocked = 1;
+    this.uplinkActive = false;
+    this.uplinkTimer = 0;
+    this.uplinkCooldown = CONFIG.uplink.cooldown;
+    this.uplinkPos = null;
+    this.uplinkTier = 0;
+    this._clearUplinkMesh();
+    // Reset stadium floodlights and the breaker hold charge.
+    this.stadiumLightsActive = false;
+    this._breakerHold = 0;
+    if (this.world.setStadiumLights) this.world.setStadiumLights(false);
     this.player.reset();
     this.weapon.reset();
     this.bots.clearAll();
@@ -823,12 +868,15 @@ export class Game {
 
   onBotKilled(wasInfected) {
     this.kills++;
-    this.score += 100;
-    // Accurate kill feed: infected = neutralized, innocent = civilian down.
-    this.ui.addKillFeed(wasInfected ? 'INFECTED NEUTRALIZED +100' : 'CIVILIAN DOWN +100');
-    this.ui.showHitmarker();
-    this.story.onKill();
-  }
+      // Kill Bounty = (100 × Active Multiplier) + (Active Infected Count × 10)
+      const infectedBonus = this.bots.infectedCount() * CONFIG.scoring.killPerInfected;
+      const points = Math.round((CONFIG.scoring.killBase * this.scoreMultiplier) + infectedBonus);
+      this.score += points;
+      // Accurate kill feed: infected = neutralized, innocent = civilian down.
+      this.ui.addKillFeed(wasInfected ? `HOST NEUTRALIZED +${points}` : `CIVILIAN DOWN +${points}`);
+      this.ui.showHitmarker();
+      this.story.onKill();
+    }
 
   onPlayerDamaged() {
     this.ui.showDamage();
@@ -839,7 +887,7 @@ export class Game {
     // In co-op, both players lose. In PVP, the shooter is disqualified.
     this.state = 'gameover';
     this.audio.explosion();
-    const reason = 'YOU SHOT AN INNOCENT CIVILIAN';
+    const reason = 'COVER BLOWN: CIVILIAN CASUALTY';
     this.ui.showGameOver(this.score, this.kills, reason, this.gameTimeSurvived, this.playerTime);
     document.exitPointerLock();
     // Notify the remote player (co-op shared loss only — in PVP the client
@@ -849,8 +897,129 @@ export class Game {
     }
   }
 
-  // Tag candidate NPC under crosshair with allocation-free geometry math.
-  tagCurrentTarget() {
+  // --- Black-Box Uplink multiplier beacons ---
+
+  // Spawn the next eligible uplink beacon at a random open street/roof spot.
+  // Tiers must be earned in sequence: 2x -> 3x -> 4x -> 5x -> Apex (random 2x-5x).
+  _spawnUplink() {
+    if (this.uplinkActive) return;
+    // Determine the tier.
+    let tier;
+    if (this.highestTierUnlocked < CONFIG.uplink.tiers.length) {
+      tier = CONFIG.uplink.tiers[this.highestTierUnlocked - 1];
+    } else {
+      // Apex tier: random 2x-5x.
+      tier = CONFIG.uplink.apexTiers[Math.floor(Math.random() * CONFIG.uplink.apexTiers.length)];
+    }
+
+    // Find an open position (not colliding with obstacles).
+    let x, z, attempts = 0;
+    do {
+      x = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
+      z = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
+      attempts++;
+    } while (this.world.collides(x, z, 0.8) && attempts < 50);
+
+    this.uplinkActive = true;
+    this.uplinkTimer = CONFIG.uplink.lifetime;
+    this.uplinkTier = tier;
+    this.uplinkPos = new THREE.Vector3(x, 0, z);
+
+    // Illuminated light pillar.
+    const beamGeo = new THREE.CylinderGeometry(0.5, 0.5, 20, 10, 1, true);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: 0x00e5ff,
+      transparent: true,
+      opacity: 0.35,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.uplinkMesh = new THREE.Mesh(beamGeo, beamMat);
+    this.uplinkMesh.position.set(x, 10, z);
+    this.scene.add(this.uplinkMesh);
+
+    // Global broadcast: HUD banner + audio alert.
+    this.ui.addKillFeed(`BLACK-BOX UPLINK DETECTED: ${tier}X`);
+    this.audio.pickup();
+  }
+
+  // Remove the live uplink beacon mesh (despawn or collection).
+  _clearUplinkMesh() {
+    if (this.uplinkMesh) {
+      if (this.uplinkMesh.parent) this.scene.remove(this.uplinkMesh);
+      this.uplinkMesh = null;
+    }
+  }
+
+  // Collect the live uplink beacon: activate the multiplier for its duration.
+  _collectUplink() {
+    if (!this.uplinkActive || !this.uplinkPos) return;
+    const tier = this.uplinkTier;
+    this.scoreMultiplier = tier;
+    this.multiplierTimer = CONFIG.uplink.duration;
+    // Advance the tier progression (2x -> 3x -> 4x -> 5x -> Apex).
+    if (tier >= this.highestTierUnlocked && this.highestTierUnlocked < CONFIG.uplink.tiers.length) {
+      this.highestTierUnlocked = tier + 1;
+    }
+    this.ui.addKillFeed(`UPLINK SECURED: ${tier}X MULTIPLIER ACTIVE!`);
+    this.audio.pickup();
+    this._clearUplinkMesh();
+    this.uplinkActive = false;
+    this.uplinkPos = null;
+    this.uplinkCooldown = CONFIG.uplink.cooldown;
+  }
+
+  // Update the uplink lifecycle: spawn, despawn, cooldown, and collection.
+  _updateUplink(dt) {
+    // Only the host simulates beacons; clients see them via snapshots.
+    if (this.networkRole === 'client') return;
+
+    if (this.uplinkActive) {
+      // Check collection: player standing on the beacon.
+      if (this.uplinkPos && this.player.pos.distanceTo(this.uplinkPos) < 1.8) {
+        this._collectUplink();
+        return;
+      }
+      // Despawn timer.
+      this.uplinkTimer -= dt;
+      if (this.uplinkTimer <= 0) {
+        this.ui.addKillFeed('UPLINK LOST — SIGNAL FADED');
+        this._clearUplinkMesh();
+        this.uplinkActive = false;
+        this.uplinkPos = null;
+        this.uplinkCooldown = CONFIG.uplink.cooldown;
+      }
+    } else if (this.uplinkCooldown > 0) {
+      this.uplinkCooldown -= dt;
+      if (this.uplinkCooldown <= 0) this._spawnUplink();
+    }
+  }
+
+  // Toggle the stadium floodlight grid. When ON, the arena floods with
+  // daylight illumination: stealth concealment drops to zero, bot visual
+  // acquisition extends to maximum map boundaries, and every wandering
+  // infected thrall is drawn toward the central generator station.
+  toggleStadiumLights() {
+    this.stadiumLightsActive = !this.stadiumLightsActive;
+    if (this.world.setStadiumLights) {
+      this.world.setStadiumLights(this.stadiumLightsActive);
+    }
+    this.ui.addKillFeed(this.stadiumLightsActive ? 'STADIUM GRID ONLINE — LIGHTS FLOOD THE ARENA' : 'STADIUM GRID OFFLINE');
+    // When the lights come on, every infected thrall abandons its route and
+    // sprints toward the central generator station.
+    if (this.stadiumLightsActive && this.bots.alert) {
+      const breakerPos = this.world.breaker ? this.world.breaker.pos : new THREE.Vector3(0, 0, 0);
+      for (const bot of this.bots.bots) {
+        if (!bot.alive || !bot.infected) continue;
+        bot.lastKnownPlayerPos = breakerPos.clone();
+        bot.state = 'chase';
+        bot.lastDamageTime = performance.now() / 1000;
+      }
+    }
+  }
+
+    // Tag candidate NPC under crosshair with allocation-free geometry math.
+    tagCurrentTarget() {
     const now = performance.now() / 1000;
     if (now - this.lastTagTime < this.tagCooldown) {
       const wait = Math.ceil(this.tagCooldown - (now - this.lastTagTime));
@@ -896,16 +1065,17 @@ export class Game {
       this.audio.tagPing(best.infected);
 
       if (best.infected) {
-        this.ui.addKillFeed('TAG SUCCESS: INFECTED IDENTIFIED!');
+        this.ui.addKillFeed('TARGET CONFIRMED: THE WEAVE DETECTED');
       } else {
-        this.ui.addKillFeed('TAG WARNING: INNOCENT CIVILIAN');
+        this.ui.addKillFeed('TARGET SCAN: UNINFECTED CIVILIAN');
       }
     }
   }
 
   // Interact with environmental objects: fuse boxes (cut lights), car alarms,
-  // and trash cans (loud distractions that draw bots). Also revives a downed
-  // co-op partner standing nearby.
+  // trash cans (loud distractions that draw bots), and the stadium circuit
+  // breaker (hold to flood the arena with light). Also revives a downed co-op
+  // partner standing nearby.
   interact() {
     const p = this.player.pos;
     // Render-only clients send the interact to the host to resolve.
@@ -913,6 +1083,13 @@ export class Game {
       // Downed players can't interact.
       if (!this.player.alive) return;
       this.network.send('interact', { p: [p.x, p.y, p.z] });
+      return;
+    }
+    // 0. Stadium circuit breaker — hold F for 3.0s to flood the arena.
+    // The hold is accumulated in _update() from the live key state, which also
+    // fires the toggle; here we only report progress.
+    if (this.world.isAtBreaker(p)) {
+      this.ui.addKillFeed(`HOLDING BREAKER... ${Math.ceil(CONFIG.stadium.holdTime - this._breakerHold)}s`);
       return;
     }
     // 0. Co-op revive: if the partner is downed and nearby, revive them.
@@ -963,6 +1140,23 @@ export class Game {
     this.input.mouseDX = 0;
     this.input.mouseDY = 0;
 
+    // Stadium breaker hold: accumulate while the interact key is actually held
+    // at the breaker, and decay when the player steps away or releases it.
+    // The toggle fires here (not on keydown) so a continuous hold completes.
+    if (this.world.isAtBreaker(this.player.pos)) {
+      if (this.input.keys[this.keybinds.get('interact')]) {
+        this._breakerHold = (this._breakerHold || 0) + dt;
+        if (this._breakerHold >= CONFIG.stadium.holdTime) {
+          this._breakerHold = 0;
+          this.toggleStadiumLights();
+        }
+      } else {
+        this._breakerHold = 0;
+      }
+    } else if (this._breakerHold) {
+      this._breakerHold = 0;
+    }
+
     // Mobile joystick -> keys
     if (this.input.joyX !== 0 || this.input.joyY !== 0) {
       this.input.keys['KeyW'] = this.input.joyY > 0.2;
@@ -981,6 +1175,81 @@ export class Game {
     // Footstep noise alerts bots within the player's noise radius.
     if (this.player.noiseRadius > 0) {
       this.bots.alertNoise(this.player.pos, this.player.noiseRadius);
+    }
+
+    // Dynamic Pressure Scoring Engine:
+    // Active Score Rate (pts/sec) = (5 + Active Infected Count × 2.5) × Active Multiplier
+    if (this.state === 'playing') {
+      // Multiplier countdown.
+      if (this.multiplierTimer > 0) {
+        this.multiplierTimer -= dt;
+        if (this.multiplierTimer <= 0) {
+          this.scoreMultiplier = 1;
+          this.ui.addKillFeed('MULTIPLIER UPLINK EXPIRED');
+        }
+      }
+      const infCount = this.bots.infectedCount();
+      const densityRate = CONFIG.scoring.baseRate + (infCount * CONFIG.scoring.perInfected);
+      // Accumulate fractionally, but only ever expose whole points.
+      this._scoreAccum += densityRate * this.scoreMultiplier * dt;
+      const whole = Math.floor(this._scoreAccum);
+      if (whole > 0) {
+        this.score += whole;
+        this._scoreAccum -= whole;
+      }
+    }
+
+    // Black-Box Uplink beacon lifecycle (spawn / despawn / collect).
+    this._updateUplink(dt);
+
+    // Sixth Sense (Neural Radar) perk: soft directional pulse + HUD radar cue
+    // when an infected host enters within 14 meters.
+    if (this.player.hasPerk && this.player.hasPerk('sixthSense')) {
+      this._radarTimer = (this._radarTimer || 0) - dt;
+      if (this._radarTimer <= 0) {
+        this._radarTimer = CONFIG.perks.sixthSense.pulseInterval;
+        let nearest = Infinity;
+        for (const bot of this.bots.bots) {
+          if (!bot.alive || !bot.infected) continue;
+          const d = bot.pos.distanceTo(this.player.pos);
+          if (d < nearest) nearest = d;
+        }
+        if (nearest < CONFIG.perks.sixthSense.range) {
+          this.audio.pickup();
+          this.ui.addKillFeed('NEURAL RADAR: INFECTED SIGNATURE DETECTED');
+        }
+      }
+    }
+
+    // Thermal Scanner perk: aiming at an NPC highlights infected micro-tells
+    // (green visor hue) — the scanner reveals infected through the crosshair.
+    if (this.player.hasPerk && this.player.hasPerk('thermal') && this.state === 'playing') {
+      this._thermalTimer = (this._thermalTimer || 0) - dt;
+      if (this._thermalTimer <= 0) {
+        this._thermalTimer = 0.25; // re-check 4x/sec
+        const origin = this.player.camera.getWorldPosition(new THREE.Vector3());
+        const dir = new THREE.Vector3();
+        this.player.camera.getWorldDirection(dir);
+        let best = null;
+        let bestDist = CONFIG.perks.thermal.range;
+        for (const bot of this.bots.bots) {
+          if (!bot.alive) continue;
+          const center = bot.pos.clone().add(new THREE.Vector3(0, 1.5, 0));
+          const toBot = center.clone().sub(origin);
+          const dist = toBot.length();
+          if (dist > bestDist) continue;
+          const t = toBot.clone().normalize().dot(dir);
+          if (t > 0.94) {
+            if (dist < bestDist) {
+              best = bot;
+              bestDist = dist;
+            }
+          }
+        }
+        if (best && best.infected) {
+          this.ui.addKillFeed('THERMAL: INFECTED MICRO-TELL DETECTED');
+        }
+      }
     }
 
     // Creaky stairs: wooden risers creak when walked on (standing or sprinting),
@@ -1050,7 +1319,7 @@ export class Game {
       if (this.hideTimer <= 0) {
         this.state = 'playing';
         this.ui.hideHideCountdown();
-        this.ui.addKillFeed('THE HUNT BEGINS');
+        this.ui.addKillFeed('CONTAGION BREACH: PHASE 1');
         this.audio.kill();
         // Seed the infection — "the other" blends in among the NPCs.
         // Only the HOST seeds it; the client receives infected flags in snapshots.
@@ -1085,9 +1354,11 @@ export class Game {
           this.world.revealPosition(this.player.pos, 3.0); // Lock spotlight for 3s
           if (this.bots.alert) this.bots.alert(this.player.pos);
         } else {
-          // Silent melee takedowns do not attract the spotlight.
+          // Silent melee takedowns do not attract the spotlight. They emit a
+          // near-silent 1.0m noise radius — no crowd stampede, no spotlight.
           if (result.type === 'bot' && result.killed && this.effects.stealthKill) {
             this.effects.stealthKill(result.pos || this.player.pos);
+            this.bots.alertNoise(this.player.pos, 1.0);
           }
         }
         // In multiplayer, the CLIENT sends the shot to the host so it can
@@ -1152,7 +1423,7 @@ export class Game {
           if (shoved.infected) {
             // Infected breaks disguise: hiss, bare weapons, enter pursuit.
             this.audio.hiss();
-            this.ui.addKillFeed('THE OTHER REVEALED!');
+            this.ui.addKillFeed('THE THREADED REVEALED!');
             shoved.state = 'chase';
             shoved.lastDamageTime = performance.now() / 1000;
             if (this.effects.infectionTaint) this.effects.infectionTaint(shoved.pos);
@@ -1332,4 +1603,7 @@ export class Game {
 // Boot
 window.addEventListener('DOMContentLoaded', () => {
   window.game = new Game();
+  // Expose the asset version so a stale cached module graph is easy to spot
+  // in the console (compare against js/version.js).
+  window.ASSET_VERSION = ASSET_VERSION;
 });

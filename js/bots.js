@@ -1,8 +1,8 @@
 // AI bots: patrol, chase, and shoot the player.
 
 import * as THREE from 'three';
-import { CONFIG, WORLD_HALF } from './config.js';
-import { generateFabricTexture, generateNormalMap } from './textures.js';
+import { CONFIG, WORLD_HALF } from './config.js?v=20261002c';
+import { generateFabricTexture, generateNormalMap } from './textures.js?v=20261002c';
 
 // Civilian archetypes — distinct personalities for uninfected NPCs.
 export const BOT_ARCHETYPES = {
@@ -541,6 +541,19 @@ export class Bots {
     }
   }
 
+    // True if a bot can currently sense the player: requires line of sight OR
+    // tight vertical alignment, unless the player is loud enough to be heard
+    // through the floor (sprinting / jumping / unsuppressed gunfire).
+    // Separation is measured feet-to-feet: player.pos.y is eye height while
+    // bot.pos.y is feet, so a raw difference reads ~1.7m even on the same floor.
+    canSense(player, bot) {
+      if (!player || !bot) return false;
+      const hasLOS = this.world.hasLineOfSight(bot.pos, player.pos);
+      const playerFeetY = player.pos.y - (player.standHeight || 0);
+      const vertSep = Math.abs(playerFeetY - bot.pos.y);
+      return hasLOS || vertSep <= 2.2 || player.noiseRadius >= 15;
+    }
+
   update(dt, player, hiding, rival = null) {
     const now = performance.now() / 1000;
     // Continuously spawn new civilians walking in.
@@ -578,6 +591,17 @@ export class Bots {
       toPlayer.y = 0;
       const distToPlayer = toPlayer.length();
       const hasLOS = this.world.hasLineOfSight(bot.pos, player.pos);
+
+      // Vertical sensory blindness: if a bot lacks line of sight AND the
+      // vertical separation is large (>2.2m — a full floor), the bot cannot
+      // sense or track the player through the ceiling/floor slab — UNLESS the
+      // player is making enough noise (sprinting, jumping, unsuppressed
+      // gunfire: noiseRadius >= 15). Ducking or stationary players on roofs
+      // remain undetectable to bots below.
+      // Feet-to-feet: player.pos.y is eye height, bot.pos.y is feet.
+      const playerFeetY = player.pos.y - (player.standHeight || 0);
+      const vertSep = Math.abs(playerFeetY - bot.pos.y);
+      const canSensePlayer = hasLOS || vertSep <= 2.2 || player.noiseRadius >= 15;
 
       // Render-only clients: skip ALL AI — the host broadcasts authoritative
       // transforms every 30Hz. Just animate the limbs for a living look.
@@ -631,11 +655,46 @@ export class Bots {
         bot.coverPoint = null;
       }
 
+      // --- Flashlight visibility cone ---
+      // When the player's flashlight is ON, they are visible from much farther
+      // (35m) inside a 45-degree forward cone. Any bot with direct LOS to the
+      // cone immediately turns to face the source; infected thralls abandon
+      // civilian routes and sprint toward the beam.
+      if (player.flashlightOn && !hiding) {
+        const fl = CONFIG.flashlight;
+        const toBot = new THREE.Vector3(bot.pos.x - player.pos.x, 0, bot.pos.z - player.pos.z);
+        const distToBot = toBot.length();
+        if (distToBot < fl.visibilityRange) {
+          // Player's forward direction (yaw-based).
+          const fwdX = -Math.sin(player.yaw);
+          const fwdZ = -Math.cos(player.yaw);
+          const dot = (toBot.x * fwdX + toBot.z * fwdZ) / (distToBot || 1);
+          if (dot > Math.cos(fl.coneHalfAngle)) {
+            // Bot is inside the beam cone. If it has LOS, it reacts.
+            if (hasLOS) {
+              bot.group.rotation.y = Math.atan2(player.pos.x - bot.pos.x, player.pos.z - bot.pos.z);
+              if (bot.infected) {
+                // Infected thralls sprint toward the beam.
+                bot.lastKnownPlayerPos = player.pos.clone();
+                bot.state = 'chase';
+                bot.lastDamageTime = performance.now() / 1000;
+              }
+            }
+          }
+        }
+      }
+
       // --- State machine ---
       // Only infected bots are hostile. Uninfected civilians just patrol.
-      if (bot.infected && distToPlayer < CONFIG.bot.aggroRange && hasLOS && !hiding) {
+      // Vertical sensory blindness: bots can't acquire the player through a
+      // floor slab unless the player is loud enough to be heard through it.
+      // Stadium floodlights: when the grid is ON, ambient stealth concealment
+      // drops to zero and bot visual acquisition extends to max map bounds.
+      const stadiumOn = this.world.stadiumLightsActive;
+      const aggroRange = stadiumOn ? CONFIG.worldSize * 2 : CONFIG.bot.aggroRange;
+      if (bot.infected && distToPlayer < aggroRange && (canSensePlayer || stadiumOn) && !hiding) {
         bot.state = 'chase';
-      } else if (bot.state === 'chase' && distToPlayer > CONFIG.bot.aggroRange * 1.5) {
+      } else if (bot.state === 'chase' && distToPlayer > aggroRange * 1.5) {
         bot.state = 'patrol';
         bot.coverPoint = null;
         bot.target.set(
@@ -809,7 +868,14 @@ export class Bots {
         }
 
         // Damage the target on contact (host player or PVP rival).
-        if (distToTarget < inf.infectRange && target.alive) {
+        // Vertical alignment required: a bot directly beneath the player on a
+        // lower floor must NOT hit through the ceiling slab. Both horizontal
+        // proximity AND tight vertical alignment are required.
+        // Feet-to-feet: player.pos.y is eye height, bot.pos.y is feet.
+        const targetFeetY = target.pos.y - (target.standHeight || 0);
+        const horizDist = Math.hypot(target.pos.x - bot.pos.x, target.pos.z - bot.pos.z);
+        const vertDist = Math.abs(targetFeetY - bot.pos.y);
+        if (horizDist < inf.infectRange && vertDist < 1.1 && target.alive) {
           target.damage(inf.infectedDamage);
           if (target === player && this.onPlayerDamage) this.onPlayerDamage();
           // If the rival was killed, notify the client (PVP).

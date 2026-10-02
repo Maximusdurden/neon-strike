@@ -302,6 +302,66 @@ export const CONFIG = {
     sweepSpeed: 0.6,       // radians per second for the sweeping spotlight
     revealColor: 0xff2d78, // color of the reveal glow
   },
-};
+
+    // --- UNASSIMILATED: Sensory Perks (discoverable, not baseline) ---
+    perks: {
+      // Sixth Sense (Neural Radar): directional pulse when infected enter range.
+      sixthSense: {
+        range: 14,           // meters — infected within this trigger the pulse
+        pulseInterval: 1.2,  // seconds between radar pulses
+      },
+      // Thermal Scanner: aiming at an NPC highlights infected micro-tells.
+      thermal: {
+        range: 30,           // meters — how far the scanner reads
+      },
+      // Soft Soles: halves footstep noise (sprint 18->9m, walk 5->2m).
+      softSoles: {
+        sprintMult: 0.5,
+        walkMult: 0.4,
+      },
+      // Adrenaline Syringe: no stamina drain + 1.25x sprint for 10s.
+      adrenaline: {
+        duration: 10.0,      // seconds of boosted sprint
+        sprintMult: 1.25,    // extra sprint speed multiplier
+      },
+    },
+
+    // --- UNASSIMILATED: Player Flashlight ---
+    flashlight: {
+      color: 0xfffaed,
+      intensity: 2.5,
+      distance: 30,          // meters the beam reaches
+      angle: Math.PI / 7,    // beam half-angle
+      // Stealth consequence: when ON, the player is visible from much farther
+      // inside a forward cone. Bots with LOS to the cone turn to face the source.
+      visibilityRange: 35,   // meters — how far the beam reveals the player
+      coneHalfAngle: Math.PI / 4, // 45-degree forward cone
+    },
+
+    // --- UNASSIMILATED: Stadium Floodlights & Circuit Breaker ---
+    stadium: {
+      pylonDistance: 45,     // pylons at (X, Z = ±45m)
+      pylonHeight: 28,       // meters
+      pylonCount: 4,
+      breakerPos: { x: 0, z: 0 }, // central plaza generator
+      holdTime: 3.0,         // seconds to hold E to activate
+      floodIntensity: 2.2,   // daylight flood when active
+    },
+
+    // --- UNASSIMILATED: Pressure Scoring & Black-Box Uplinks ---
+    scoring: {
+      baseRate: 5,           // pts/sec base survival rate
+      perInfected: 2.5,      // pts/sec per active infected
+      killBase: 100,         // base kill bounty
+      killPerInfected: 10,   // bonus per active infected on kill
+    },
+    uplink: {
+      lifetime: 10,          // seconds a beacon stays available
+      cooldown: 30,          // seconds after collect/despawn before next spawn
+      duration: 15,          // seconds the multiplier stays active once collected
+      tiers: [2, 3, 4, 5],   // sequential tier multipliers
+      apexTiers: [2, 3, 4, 5], // apex tier random 2x-5x
+    },
+  };
 
 export const WORLD_HALF = CONFIG.worldSize;

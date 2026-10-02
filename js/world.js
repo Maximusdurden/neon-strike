@@ -1,8 +1,8 @@
 // Procedural neon city: terrain, streets, buildings, crates, sky, weather, day-night.
 
 import * as THREE from 'three';
-import { CONFIG, WORLD_HALF } from './config.js';
-import { generateAsphaltRoughnessMap, generateBrickNormalMap } from './textures.js';
+import { CONFIG, WORLD_HALF } from './config.js?v=20261002c';
+import { generateAsphaltRoughnessMap, generateBrickNormalMap } from './textures.js?v=20261002c';
 
 // --- Building / stair generation constants ---
 const FLOOR_HEIGHT = 3.5;   // meters per story
@@ -42,6 +42,12 @@ export class World {
     this.hour = CONFIG.dayNight.startHour;
     this.built = false;
 
+    // Stadium floodlights (OFF by default) + central circuit breaker.
+    this.stadiumLightsActive = false;
+    this.stadiumPylons = [];   // { mesh, light, pos }
+    this.breaker = null;       // { mesh, pos, active }
+    this.breakerHold = 0;      // seconds the player has held E at the breaker
+
     // Seeded RNG: if a seed is provided, ALL procedural placement uses it so
     // two clients build the same city. Solo play uses Math.random (unseeded).
     this.seed = seed;
@@ -64,6 +70,7 @@ export class World {
     this._buildBarriers();
     this._buildCars();
     this._buildTrashCans();
+    this._buildStadium();
     this._buildSky();
     this._buildRain();
     this._buildReflection();
@@ -343,29 +350,53 @@ export class World {
     }
   }
 
-  // Builds individual climbable steps and platform colliders for one flight.
+  // Builds individual climbable steps with solid vertical risers underneath each step
   _addFloorStaircase(startX, startZ, baseY, steps, dirX, stairMat) {
     for (let i = 0; i < steps; i++) {
       const stepTopY = baseY + (i + 1) * STEP_H;
       const stepCenterY = baseY + (i + 0.5) * STEP_H;
       const stepX = startX + (i + 0.5) * STEP_D * dirX;
 
-      // Tread
+      // 1. Walkable Step Tread
       const tread = new THREE.Mesh(new THREE.BoxGeometry(STEP_D, STEP_H, STAIR_W), stairMat);
       tread.position.set(stepX, stepCenterY, startZ);
       tread.castShadow = true;
       this.scene.add(tread);
 
-      // Platform walkable surface collider
+      // 2. Solid Underside Infill (Only directly below this step down to floor level)
+      const underHeight = i * STEP_H;
+      if (underHeight > 0.05) {
+        const underMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(STEP_D, underHeight, STAIR_W),
+          stairMat
+        );
+        underMesh.position.set(stepX, baseY + underHeight / 2, startZ);
+        underMesh.castShadow = true;
+        this.scene.add(underMesh);
+      }
+
+      // 3. Walkable Platform Registration
       this.platforms.push({
         minX: stepX - STEP_D / 2,
         maxX: stepX + STEP_D / 2,
         minZ: startZ - STAIR_W / 2,
         maxZ: startZ + STAIR_W / 2,
         topY: stepTopY,
-        creak: true, // wooden stair — creaks when walked on
+        creak: true,
       });
     }
+
+    // 4. Under-Stair Closet Back Wall (Only blocks entry from the tall back end)
+    // Placed at the high end of the flight so players can't walk into the 1.8m+ cavity behind the stairs
+    const backWallX = startX + steps * STEP_D * dirX;
+    this.obstacles.push({
+      minX: backWallX - 0.2,
+      maxX: backWallX + 0.2,
+      minZ: startZ - STAIR_W / 2,
+      maxZ: startZ + STAIR_W / 2,
+      height: baseY + steps * STEP_H,
+      wall: true,
+    });
   }
 
   // Add a wall mesh. axis 'x' means the wall runs along X (length along X).
@@ -555,6 +586,89 @@ export class World {
     }
   }
 
+  // Build the stadium floodlight grid + central circuit breaker substation.
+  // 4 industrial light pylons at (X, Z = ±45m), height 28m. Lights are OFF by
+  // default (intensity 0.0). The breaker sits in the central plaza at (0,0)
+  // and requires a 3.0-second hold (KeyE) to activate.
+  _buildStadium() {
+    const st = CONFIG.stadium;
+    const pylonMat = new THREE.MeshStandardMaterial({ color: 0x2a2a3a, metalness: 0.7, roughness: 0.4 });
+    const lampMat = new THREE.MeshStandardMaterial({ color: 0xfffaed, emissive: 0xfffaed, emissiveIntensity: 0.8 });
+
+    const positions = [
+      [st.pylonDistance, st.pylonDistance],
+      [st.pylonDistance, -st.pylonDistance],
+      [-st.pylonDistance, st.pylonDistance],
+      [-st.pylonDistance, -st.pylonDistance],
+    ];
+
+    for (const [px, pz] of positions) {
+      const group = new THREE.Group();
+      // Tower column
+      const column = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, st.pylonHeight, 8), pylonMat);
+      column.position.y = st.pylonHeight / 2;
+      group.add(column);
+      // Lamp head (facing the arena center)
+      const lamp = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.8, 1.2), lampMat);
+      lamp.position.y = st.pylonHeight + 0.4;
+      group.add(lamp);
+      group.position.set(px, 0, pz);
+      group.castShadow = true;
+      this.scene.add(group);
+
+      // Floodlight: a spotlight aimed at the arena center. OFF by default.
+      const flood = new THREE.SpotLight(0xfffaed, 0.0, 200, Math.PI / 6, 0.5, 1.5);
+      flood.position.set(px, st.pylonHeight + 1, pz);
+      flood.target.position.set(-px * 0.5, 0, -pz * 0.5);
+      flood.castShadow = true;
+      this.scene.add(flood);
+      this.scene.add(flood.target);
+
+      this.stadiumPylons.push({ group, lamp, flood, pos: new THREE.Vector3(px, 0, pz) });
+    }
+
+    // Central circuit breaker substation at (0,0).
+    const breakerGroup = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.6, 1.6), pylonMat);
+    base.position.y = 0.3;
+    breakerGroup.add(base);
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.8, 10), lampMat.clone());
+    core.position.y = 0.9;
+    breakerGroup.add(core);
+    breakerGroup.position.set(st.breakerPos.x, 0, st.breakerPos.z);
+    breakerGroup.castShadow = true;
+    this.scene.add(breakerGroup);
+    this.breaker = {
+      mesh: breakerGroup,
+      core,
+      pos: new THREE.Vector3(st.breakerPos.x, 0, st.breakerPos.z),
+      active: false,
+    };
+  }
+
+  // Toggle the stadium floodlight grid. When ON, the arena floods with
+  // high-intensity daylight illumination and stealth concealment drops to zero.
+  setStadiumLights(on) {
+    this.stadiumLightsActive = on;
+    for (const p of this.stadiumPylons) {
+      p.flood.intensity = on ? CONFIG.stadium.floodIntensity : 0.0;
+      p.lamp.material.emissiveIntensity = on ? 1.2 : 0.8;
+    }
+    if (this.breaker) {
+      this.breaker.active = on;
+      this.breaker.core.material.color.setHex(on ? 0x3bff8a : 0xfffaed);
+      this.breaker.core.material.emissive.setHex(on ? 0x3bff8a : 0xfffaed);
+    }
+  }
+
+  // True if the player is standing at the central breaker substation.
+  isAtBreaker(pos) {
+    if (!this.breaker) return false;
+    const dx = pos.x - this.breaker.pos.x;
+    const dz = pos.z - this.breaker.pos.z;
+    return Math.hypot(dx, dz) < 2.2;
+  }
+
   // Return a list of cover points (positions near obstacles) for bots to use.
   getCoverPoints() {
     const points = [];
@@ -734,12 +848,18 @@ export class World {
 
   // Get the ground height at a position (0 for ground, or platform top).
   // Only returns platforms the player can step onto from their current height.
+  // Strictly ignores any surface that is ABOVE the player's feet by more than
+  // stepHeight + 0.05 — this prevents upward snapping through overhead flights
+  // (Bug 2: stair clipping & open underside traps).
   getGroundHeight(x, z, currentFeetY = 0) {
     let groundY = 0;
     const step = CONFIG.building.stepHeight;
     const eps = 0.1; // tolerance for gravity pulling feet slightly below ground
     for (const p of this.platforms) {
       if (x > p.minX && x < p.maxX && z > p.minZ && z < p.maxZ) {
+        // Strict overhead cutoff: never snap up onto a surface more than
+        // stepHeight + 0.05 above the current feet position.
+        if (p.topY > currentFeetY + step + 0.05) continue;
         // Only step onto platforms that are within stepHeight of current height
         if (p.topY <= currentFeetY + step + eps && p.topY > groundY) {
           groundY = p.topY;

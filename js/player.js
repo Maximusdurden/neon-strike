@@ -1,7 +1,7 @@
 // First-person player controller: movement, camera, crouching, stamina, and audio radii.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js';
+import { CONFIG } from './config.js?v=20261002c';
 
 export class Player {
   constructor(camera, world, keybinds) {
@@ -46,6 +46,16 @@ export class Player {
     this.leanTarget = 0;   // -1 (Q) .. 1 (E)
     this.leanAmount = 0;   // smoothed current lean
 
+    // Flashlight (tactical beam) — KeyF toggle
+    this.flashlightOn = false;
+    this.flashlight = null; // THREE.SpotLight attached to the camera
+
+    // Sensory perks (discovered in the environment, not baseline).
+    // Each is a string id: 'sixthSense' | 'thermal' | 'softSoles' | 'adrenaline'
+    this.perks = [];
+    // Adrenaline syringe active timer (seconds remaining of boosted sprint).
+    this.adrenalineTimer = 0;
+
     // Shove cooldown
     this.lastShoveTime = -999;
 
@@ -53,6 +63,46 @@ export class Player {
     this._moveDir = new THREE.Vector3();
     this._forward = new THREE.Vector3();
     this._right = new THREE.Vector3();
+
+    // Camera-attached tactical flashlight (THREE.SpotLight).
+    // The beam is a child of the camera so it tracks the view direction.
+    const fl = CONFIG.flashlight;
+    this.flashlight = new THREE.SpotLight(
+      fl.color,
+      fl.intensity,
+      fl.distance,
+      fl.angle,
+      0.4,
+      1.2
+    );
+    this.flashlight.position.set(0, 0, 0);
+    this.flashlight.target.position.set(0, 0, -1);
+    this.camera.add(this.flashlight);
+    this.camera.add(this.flashlight.target);
+    this.flashlight.visible = false;
+  }
+
+  // Toggle the tactical flashlight on/off. When ON, the player becomes
+  // visible from much farther inside a forward cone (stealth consequence).
+  toggleFlashlight() {
+    this.flashlightOn = !this.flashlightOn;
+    if (this.flashlight) this.flashlight.visible = this.flashlightOn;
+  }
+
+  // True if the player has discovered the given sensory perk.
+  hasPerk(id) {
+    return this.perks.includes(id);
+  }
+
+  // Grant a discovered sensory perk. Returns true if newly acquired.
+  addPerk(id) {
+    if (this.hasPerk(id)) return false;
+    this.perks.push(id);
+    if (id === 'adrenaline') {
+      // Adrenaline Syringe: instantly boost sprint for the duration.
+      this.adrenalineTimer = CONFIG.perks.adrenaline.duration;
+    }
+    return true;
   }
 
   setSlowFactor(healthRatio) {
@@ -75,6 +125,12 @@ export class Player {
     this.leanTarget = 0;
     this.leanAmount = 0;
     this.lastShoveTime = -999;
+    // Flashlight off on reset
+    this.flashlightOn = false;
+    if (this.flashlight) this.flashlight.visible = false;
+    // Perks reset each match
+    this.perks = [];
+    this.adrenalineTimer = 0;
   }
 
   getMuzzleWorldPos() {
@@ -189,13 +245,22 @@ export class Player {
     if (this.sprinting) speedMult = CONFIG.stamina.sprintMult;
     if (this.crouching) speedMult = 0.5; // Ducking pace
 
+    // Adrenaline Syringe: +1.25x sprint speed while the boost is active.
+    const adrenalineActive = this.adrenalineTimer > 0;
+    if (this.sprinting && adrenalineActive) {
+      speedMult *= CONFIG.perks.adrenaline.sprintMult;
+    }
+
     const speed = CONFIG.player.speed * speedMult * this.slowFactor;
     if (isMoving) this._moveDir.normalize().multiplyScalar(speed);
 
     // Stamina Drain and Crouched Fast Recovery
     const now = performance.now() / 1000;
     if (this.sprinting) {
-      this.stamina = Math.max(0, this.stamina - CONFIG.stamina.drainRate * dt);
+      // Adrenaline Syringe: no stamina drain while the boost is active.
+      if (!adrenalineActive) {
+        this.stamina = Math.max(0, this.stamina - CONFIG.stamina.drainRate * dt);
+      }
       this.lastSprintTime = now;
     } else if (now - this.lastSprintTime > CONFIG.stamina.regenDelay) {
       // Ducking accelerates stamina recovery by 1.5x
@@ -262,6 +327,11 @@ export class Player {
       this.health = Math.min(this.maxHealth, this.health + CONFIG.player.regenRate * dt);
     }
 
+    // Adrenaline Syringe timer decay.
+    if (this.adrenalineTimer > 0) {
+      this.adrenalineTimer = Math.max(0, this.adrenalineTimer - dt);
+    }
+
     // Viewmodel Bobbing
     const speed2d = Math.hypot(this.vel.x, this.vel.z);
     this.gunBob += dt * (this.onGround && speed2d > 0.5 ? 8 : 2);
@@ -279,22 +349,24 @@ export class Player {
     if (this.onGround && speed2d > 0.8) {
       this.stepTimer -= dt * speed2d;
 
-      // Noise radii: Sprinting alerts wide area; crouching is silent
+      // Noise radii: Sprinting alerts wide area; crouching is silent.
+      // Soft Soles perk halves footstep noise (sprint 18->9m, walk 5->2m).
+      const soft = this.hasPerk && this.hasPerk('softSoles');
       if (this.sprinting) {
-        this.noiseRadius = 18.0;
+        this.noiseRadius = 18.0 * (soft ? CONFIG.perks.softSoles.sprintMult : 1);
       } else if (this.crouching) {
         this.noiseRadius = 0.0;
       } else {
-        this.noiseRadius = 5.0;
+        this.noiseRadius = 5.0 * (soft ? CONFIG.perks.softSoles.walkMult : 1);
       }
 
       if (this.stepTimer <= 0) {
         this.stepTimer = this.sprinting ? 0.32 : this.crouching ? 0.75 : 0.5;
         return this.crouching ? null : 'step';
       }
-    } else {
-      this.noiseRadius = 0;
-    }
+        } else {
+          this.noiseRadius = 0;
+        }
 
     return null;
   }

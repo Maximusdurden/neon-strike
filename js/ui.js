@@ -1,7 +1,7 @@
 // HUD, minimap, menu, game-over, pause, and mobile touch controls.
 
-import { CONFIG } from './config.js';
-import { ACTION_NAMES, keyLabel } from './keybinds.js';
+import { CONFIG } from './config.js?v=20261002c';
+import { ACTION_NAMES, keyLabel } from './keybinds.js?v=20261002c';
 
 export class UI {
   constructor(game) {
@@ -459,6 +459,7 @@ export class UI {
   }
 
   showGameOver(score, kills, reason, gameTimeSurvived, playerTime) {
+    score = Math.floor(score);
     this.el.hud.classList.add('hidden');
     this.el.gameover.classList.remove('hidden');
     this.el.finalScore.textContent = 'SCORE: ' + score;
@@ -494,10 +495,14 @@ export class UI {
   }
 
   // Load persisted best stats (score / kills / time).
+  // Scores are always whole points, so legacy fractional values are floored.
   _loadBests() {
     try {
       const raw = localStorage.getItem('neonstrike_bests');
-      return raw ? JSON.parse(raw) : { score: 0, kills: 0, time: 0 };
+      const best = raw ? JSON.parse(raw) : { score: 0, kills: 0, time: 0 };
+      best.score = Math.floor(best.score || 0);
+      best.kills = Math.floor(best.kills || 0);
+      return best;
     } catch (e) {
       return { score: 0, kills: 0, time: 0 };
     }
@@ -517,10 +522,12 @@ export class UI {
   }
 
   // Load high scores from localStorage (top 5 by score).
+  // Scores are always whole points, so legacy fractional values are floored.
   _loadHighScores() {
     try {
       const raw = localStorage.getItem('neonstrike_highscores');
-      return raw ? JSON.parse(raw) : [];
+      const list = raw ? JSON.parse(raw) : [];
+      return list.map((e) => ({ ...e, score: Math.floor(e.score || 0) }));
     } catch (e) {
       return [];
     }
@@ -534,6 +541,7 @@ export class UI {
 
   // Show the high score list; if the current score qualifies, prompt for initials.
   _showHighScores(score) {
+    score = Math.floor(score);
     const list = this._loadHighScores();
     const qualifies = score > 0 && (list.length < 5 || score > list[list.length - 1].score);
 
@@ -607,7 +615,7 @@ export class UI {
     const ammo = weapon.currentAmmo;
     this.el.ammo.textContent = ammo.mag + ' / ' + ammo.reserve;
     this.el.weaponName.textContent = weapon.current.name;
-    this.el.scoreVal.textContent = score;
+    this.el.scoreVal.textContent = Math.floor(score);
 
     // Population & infection counters
     if (this.game && this.game.bots) {
