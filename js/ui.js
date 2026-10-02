@@ -1,7 +1,7 @@
 // HUD, minimap, menu, game-over, pause, and mobile touch controls.
 
-import { CONFIG } from './config.js?v=20261002c';
-import { ACTION_NAMES, keyLabel } from './keybinds.js?v=20261002c';
+import { CONFIG } from './config.js?v=20261002d';
+import { ACTION_NAMES, keyLabel } from './keybinds.js?v=20261002d';
 
 export class UI {
   constructor(game) {

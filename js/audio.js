@@ -1,7 +1,7 @@
 // Synthesized audio via Web Audio API — zero audio files.
 // Features dynamic tension/pursuit horror music, binaural sub-drones, and punchy SFX.
 
-import { CONFIG } from './config.js?v=20261002c';
+import { CONFIG } from './config.js?v=20261002d';
 
 export class AudioManager {
   constructor() {

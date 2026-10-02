@@ -2,7 +2,7 @@
 // Hitscan with tracers, per-weapon ammo, reload, and proper ray-sphere hit detection.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js?v=20261002c';
+import { CONFIG } from './config.js?v=20261002d';
 
 export class Weapon {
   constructor(scene, player, world, effects, audio, bots) {

@@ -6,4 +6,4 @@
 // serving stale copies.
 //
 // Keep the value in index.html's <script src="js/main.js?v=..."> in sync.
-export const ASSET_VERSION = '20261002c';
+export const ASSET_VERSION = '20261002d';

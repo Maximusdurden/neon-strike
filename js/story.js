@@ -2,7 +2,7 @@
 // No waves. The map population grows steadily, and the infection spreads
 // among them. Major population milestones are called out on the banner.
 
-import { CONFIG } from './config.js?v=20261002c';
+import { CONFIG } from './config.js?v=20261002d';
 
 export class Story {
   constructor(game) {

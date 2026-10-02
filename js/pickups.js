@@ -1,7 +1,7 @@
 // Health, ammo, melee weapon pickups, and enemy drops.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js?v=20261002c';
+import { CONFIG } from './config.js?v=20261002d';
 
 export class Pickups {
   constructor(scene, world, audio, onPickup) {

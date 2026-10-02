@@ -1,8 +1,8 @@
 // AI bots: patrol, chase, and shoot the player.
 
 import * as THREE from 'three';
-import { CONFIG, WORLD_HALF } from './config.js?v=20261002c';
-import { generateFabricTexture, generateNormalMap } from './textures.js?v=20261002c';
+import { CONFIG, WORLD_HALF } from './config.js?v=20261002d';
+import { generateFabricTexture, generateNormalMap } from './textures.js?v=20261002d';
 
 // Civilian archetypes — distinct personalities for uninfected NPCs.
 export const BOT_ARCHETYPES = {

@@ -1,7 +1,7 @@
 // First-person player controller: movement, camera, crouching, stamina, and audio radii.
 
 import * as THREE from 'three';
-import { CONFIG } from './config.js?v=20261002c';
+import { CONFIG } from './config.js?v=20261002d';
 
 export class Player {
   constructor(camera, world, keybinds) {

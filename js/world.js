@@ -1,8 +1,8 @@
 // Procedural neon city: terrain, streets, buildings, crates, sky, weather, day-night.
 
 import * as THREE from 'three';
-import { CONFIG, WORLD_HALF } from './config.js?v=20261002c';
-import { generateAsphaltRoughnessMap, generateBrickNormalMap } from './textures.js?v=20261002c';
+import { CONFIG, WORLD_HALF } from './config.js?v=20261002d';
+import { generateAsphaltRoughnessMap, generateBrickNormalMap } from './textures.js?v=20261002d';
 
 // --- Building / stair generation constants ---
 const FLOOR_HEIGHT = 3.5;   // meters per story
@@ -261,11 +261,19 @@ export class World {
         ? (x - halfW + wt + 0.5)
         : (x + halfW - wt - 0.5);
 
+      // Real switchback: alternate flights are offset in Z so an upper flight
+      // never crosses the landing of the flight below it. Both flights stay
+      // parallel to the back wall. The slab hole moves with its flight, so the
+      // opening always lines up with the steps that pass through it.
+      const flightZ = (f % 2 === 1)
+        ? stairZ
+        : stairZ + STAIR_W + 0.15;
+
       // Build floor slab with stairwell gap
-      this._addFloorSlabWithHole(x, z, w - wt * 2, d - wt * 2, floorY, stairStartX, stairZ, stairRunLength, STAIR_W, stairDir, floorMat);
+      this._addFloorSlabWithHole(x, z, w - wt * 2, d - wt * 2, floorY, stairStartX, flightZ, stairRunLength, STAIR_W, stairDir, floorMat);
 
       // Add stairs up to this floor from the previous floor
-      this._addFloorStaircase(stairStartX, stairZ, floorY - FLOOR_HEIGHT, stairSteps, stairDir, stairMat);
+      this._addFloorStaircase(stairStartX, flightZ, floorY - FLOOR_HEIGHT, stairSteps, stairDir, stairMat);
     }
 
     this._addWindows(x, z, w, d, actualH, windowMat);
@@ -386,16 +394,24 @@ export class World {
       });
     }
 
-    // 4. Under-Stair Closet Back Wall (Only blocks entry from the tall back end)
-    // Placed at the high end of the flight so players can't walk into the 1.8m+ cavity behind the stairs
-    const backWallX = startX + steps * STEP_D * dirX;
-    this.obstacles.push({
-      minX: backWallX - 0.2,
-      maxX: backWallX + 0.2,
+    // Top landing pad: a short walkable lip past the last tread so the player
+    // steps cleanly onto the upper floor instead of snagging on the slab edge.
+    // No obstacle collider is registered here — the per-step risers already
+    // seal the underside, and a collider at the flight's top edge would block
+    // the exit (it overlaps the top tread and pushes the player back down).
+    const topX = startX + (steps + 0.5) * STEP_D * dirX;
+    const topY = baseY + steps * STEP_H;
+    const landingPad = new THREE.Mesh(new THREE.BoxGeometry(STEP_D * 2, 0.2, STAIR_W), stairMat);
+    landingPad.position.set(topX, topY - 0.1, startZ);
+    landingPad.receiveShadow = true;
+    this.scene.add(landingPad);
+
+    this.platforms.push({
+      minX: Math.min(topX - STEP_D, topX + STEP_D),
+      maxX: Math.max(topX - STEP_D, topX + STEP_D),
       minZ: startZ - STAIR_W / 2,
       maxZ: startZ + STAIR_W / 2,
-      height: baseY + steps * STEP_H,
-      wall: true,
+      topY,
     });
   }
 

@@ -2,18 +2,18 @@
 
 import * as THREE from 'three';
 import { ASSET_VERSION } from './version.js';
-import { CONFIG } from './config.js?v=20261002c';
-import { World } from './world.js?v=20261002c';
-import { Player } from './player.js?v=20261002c';
-import { Weapon } from './weapons.js?v=20261002c';
-import { Bots } from './bots.js?v=20261002c';
-import { Pickups } from './pickups.js?v=20261002c';
-import { Effects } from './effects.js?v=20261002c';
-import { AudioManager } from './audio.js?v=20261002c';
-import { UI } from './ui.js?v=20261002c';
-import { Story } from './story.js?v=20261002c';
-import { Keybinds } from './keybinds.js?v=20261002c';
-import { NetworkManager } from './network.js?v=20261002c';
+import { CONFIG } from './config.js?v=20261002d';
+import { World } from './world.js?v=20261002d';
+import { Player } from './player.js?v=20261002d';
+import { Weapon } from './weapons.js?v=20261002d';
+import { Bots } from './bots.js?v=20261002d';
+import { Pickups } from './pickups.js?v=20261002d';
+import { Effects } from './effects.js?v=20261002d';
+import { AudioManager } from './audio.js?v=20261002d';
+import { UI } from './ui.js?v=20261002d';
+import { Story } from './story.js?v=20261002d';
+import { Keybinds } from './keybinds.js?v=20261002d';
+import { NetworkManager } from './network.js?v=20261002d';
 
 export class Game {
   constructor() {
