@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import { CONFIG, WORLD_HALF } from './config.js';
+import { generateAsphaltRoughnessMap, generateBrickNormalMap } from './textures.js';
 
 // --- Building / stair generation constants ---
 const FLOOR_HEIGHT = 3.5;   // meters per story
@@ -9,27 +10,64 @@ const STEP_H = 0.25;        // stair riser height
 const STEP_D = 0.35;        // stair tread depth (along travel axis)
 const STAIR_W = 1.4;        // stair width (across travel axis)
 
+// Deterministic PRNG (mulberry32) so host + client generate IDENTICAL maps.
+// Multiplayer needs the same world on both sides — the host picks a seed and
+// sends it in the init packet; the client rebuilds with the same seed.
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export class World {
-  constructor(scene) {
+  constructor(scene, seed = null) {
     this.scene = scene;
     this.buildings = [];
     this.crates = [];
     this.obstacles = []; // colliders: { minX, maxX, minZ, maxZ, height }
     this.platforms = []; // walkable surfaces: { minX, maxX, minZ, maxZ, topY }
     this.doors = [];     // door openings: { x, z }
+    this.fuseBoxes = []; // interactive breaker boxes: { mesh, pos, building, cut, timer }
+    this.cars = [];      // parked cars: { mesh, pos, alarmed, timer }
+    this.trashCans = []; // metallic dumpsters: { mesh, pos, alarmed, timer }
     this.clock = new THREE.Clock();
     this.rainParticles = null;
     this.rainGeo = null;
     this.rainMat = null;
     this.isRaining = false;
+    this.hour = CONFIG.dayNight.startHour;
+    this.built = false;
 
+    // Seeded RNG: if a seed is provided, ALL procedural placement uses it so
+    // two clients build the same city. Solo play uses Math.random (unseeded).
+    this.seed = seed;
+    this.rng = seed !== null && seed !== undefined ? mulberry32(seed) : null;
+    this._rand = this.rng || Math.random;
+  }
+
+  // Build the city. Called lazily so multiplayer can seed the world BEFORE any
+  // geometry is created — the host picks a seed, the client rebuilds with it.
+  build(seed = null) {
+    if (seed !== null && seed !== undefined) {
+      this.seed = seed;
+      this.rng = mulberry32(seed);
+      this._rand = this.rng;
+    }
     this._buildLights();
     this._buildGround();
     this._buildCity();
     this._buildCrates();
     this._buildBarriers();
+    this._buildCars();
+    this._buildTrashCans();
     this._buildSky();
     this._buildRain();
+    this._buildReflection();
+    this.built = true;
   }
 
   _buildLights() {
@@ -63,8 +101,15 @@ export class World {
 
   _buildGround() {
     const geo = new THREE.PlaneGeometry(WORLD_HALF * 2, WORLD_HALF * 2);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x1a2330, roughness: 0.9 });
-    const ground = new THREE.Mesh(geo, mat);
+    // Wet asphalt with puddle roughness map: dry concrete stays matte, puddle
+    // zones go glossy and reflect the sweeping spotlight. Charcoal base.
+    this.groundMat = new THREE.MeshStandardMaterial({
+      color: 0x1c1e22,
+      metalness: 0.15,
+      roughness: 0.82,
+      roughnessMap: generateAsphaltRoughnessMap(),
+    });
+    const ground = new THREE.Mesh(geo, this.groundMat);
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     this.scene.add(ground);
@@ -81,24 +126,25 @@ export class World {
     const spacing = CONFIG.streetWidth;
     const placed = [];
     let attempts = 0;
-    // A palette of building styles for variety.
+    // Desaturated cinematic palette: weathered brick / dark stucco exteriors
+    // with warm tungsten or soft fluorescent window accents.
     const styles = [
-      { wall: 0x2a3a52, floor: 0x3a4a62, accent: 0x00e5ff }, // blue
-      { wall: 0x4a2a3a, floor: 0x5a3a4a, accent: 0xff2d78 }, // magenta
-      { wall: 0x2a4a3a, floor: 0x3a5a4a, accent: 0x3bff8a }, // green
-      { wall: 0x4a3a2a, floor: 0x5a4a3a, accent: 0xffd166 }, // amber
-      { wall: 0x3a2a4a, floor: 0x4a3a5a, accent: 0x9b6bff }, // purple
-      { wall: 0x3a3a3a, floor: 0x4a4a4a, accent: 0xffffff }, // grey
+      { wall: 0x23262d, floor: 0x2a2d33, accent: 0xffb86c }, // charcoal + tungsten
+      { wall: 0x2b2622, floor: 0x332d28, accent: 0x8be9fd }, // dark stucco + soft fluoro
+      { wall: 0x262a26, floor: 0x2d332d, accent: 0xffb86c }, // moss + tungsten
+      { wall: 0x2a262b, floor: 0x332d33, accent: 0x8be9fd }, // plum + fluoro
+      { wall: 0x24262a, floor: 0x2b2e33, accent: 0xffb86c }, // slate + tungsten
+      { wall: 0x2c2c2c, floor: 0x343434, accent: 0x8be9fd }, // grey + fluoro
     ];
     while (placed.length < CONFIG.buildingCount && attempts < 500) {
       attempts++;
       // Vary footprint: some small, some large, some tall towers.
-      const w = 8 + Math.random() * 12;
-      const d = 8 + Math.random() * 12;
-      const x = (Math.random() * 2 - 1) * (WORLD_HALF - 16);
-      const z = (Math.random() * 2 - 1) * (WORLD_HALF - 16);
-      const h = CONFIG.buildingMinH + Math.random() * (CONFIG.buildingMaxH - CONFIG.buildingMinH);
-      const style = styles[Math.floor(Math.random() * styles.length)];
+      const w = 8 + this._rand() * 12;
+      const d = 8 + this._rand() * 12;
+      const x = (this._rand() * 2 - 1) * (WORLD_HALF - 16);
+      const z = (this._rand() * 2 - 1) * (WORLD_HALF - 16);
+      const h = CONFIG.buildingMinH + this._rand() * (CONFIG.buildingMaxH - CONFIG.buildingMinH);
+      const style = styles[Math.floor(this._rand() * styles.length)];
 
       // Keep buildings off the central plaza and off each other.
       if (Math.abs(x) < 12 && Math.abs(z) < 12) continue;
@@ -119,18 +165,20 @@ export class World {
   // Build a hollow, enterable building with walls, a door, multi-story floors,
   // and switchback stairs that stay inside the interior footprint.
   _addBuilding(x, z, w, d, h, style = {}) {
-    const wallColor = style.wall || 0x2a3a52;
-    const floorColor = style.floor || 0x3a4a62;
-    const accentColor = style.accent || 0x00e5ff;
+    const wallColor = style.wall || 0x23262d;
+    const floorColor = style.floor || 0x2a2d33;
+    const accentColor = style.accent || 0xffb86c;
     const wallMat = new THREE.MeshStandardMaterial({
       color: wallColor,
-      roughness: 0.7,
-      metalness: 0.3,
+      roughness: 0.85,
+      metalness: 0.1,
+      normalMap: generateBrickNormalMap(),
+      normalScale: new THREE.Vector2(0.5, 0.5),
     });
-    const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 0.8 });
+    const floorMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 0.9 });
     const windowMat = new THREE.MeshBasicMaterial({ color: accentColor });
-    const doorMat = new THREE.MeshStandardMaterial({ color: 0x1a2a3a, roughness: 0.6 });
-    const stairMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 0.8 });
+    const doorMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1e, roughness: 0.6 });
+    const stairMat = new THREE.MeshStandardMaterial({ color: floorColor, roughness: 0.9 });
 
     const wt = CONFIG.building.wallThick;
     const doorW = CONFIG.building.doorWidth;
@@ -189,10 +237,13 @@ export class World {
     groundFloor.receiveShadow = true;
     this.scene.add(groundFloor);
 
-    // Stairwell placement (anchored along the back interior wall)
+    // Stairwell placement (anchored flush against the back interior wall so
+    // there's no gap between the wall and the first step to fall through).
+    // The wall collider inner face is at z - halfD + wt/2, so the stairs start
+    // exactly there — no gap.
     const stairSteps = Math.round(FLOOR_HEIGHT / STEP_H);
     const stairRunLength = stairSteps * STEP_D;
-    const stairZ = z - halfD + wt + STAIR_W / 2 + 0.2;
+    const stairZ = z - halfD + wt / 2 + STAIR_W / 2;
 
     // Generate multi-story floors & switchback stairs
     for (let f = 1; f <= numFloors; f++) {
@@ -212,13 +263,49 @@ export class World {
 
     this._addWindows(x, z, w, d, actualH, windowMat);
     this.buildings.push({ x, z, w, d, h: actualH });
+
+    // Interior volumetric light shafts — faint cones below windows/doorways
+    // that break up flat interior lighting and give stealth hiding pools.
+    this._addLightShafts(x, z, w, d, actualH, accentColor);
+
+    // Fuse box on the ground floor (interactive breaker — cuts interior lights).
+    // Placed on an interior wall near the door, at waist height.
+    if (this.fuseBoxes.length < CONFIG.env.fuseBoxCount) {
+      const fbX = x + (this._rand() < 0.5 ? -1 : 1) * (halfW * 0.5);
+      const fbZ = z + halfD - wt - 0.4;
+      const fbMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.5, 0.7, 0.12),
+        new THREE.MeshStandardMaterial({ color: 0x2a2a3a, metalness: 0.6, roughness: 0.4 })
+      );
+      fbMesh.position.set(fbX, 1.3, fbZ);
+      fbMesh.castShadow = true;
+      this.scene.add(fbMesh);
+      // Glowing indicator light (green = powered, red = cut)
+      const light = new THREE.Mesh(
+        new THREE.SphereGeometry(0.05, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0x3bff8a })
+      );
+      light.position.set(0, 0.2, 0.08);
+      fbMesh.add(light);
+      this.fuseBoxes.push({
+        mesh: fbMesh,
+        light,
+        pos: new THREE.Vector3(fbX, 1.3, fbZ),
+        building: this.buildings[this.buildings.length - 1],
+        cut: false,
+        timer: 0,
+      });
+    }
   }
 
   // Generates a floor slab divided into sections around a stairwell cutout.
   _addFloorSlabWithHole(cx, cz, fw, fd, floorY, holeX, holeZ, holeLen, holeW, dir, mat) {
     const slabThick = 0.25;
-    const holeMinX = Math.min(holeX, holeX + dir * holeLen) - 0.2;
-    const holeMaxX = Math.max(holeX, holeX + dir * holeLen) + 0.2;
+    // The hole matches the stairs EXACTLY (tiny epsilon only to avoid z-fighting).
+    // Previously a 0.2m margin left a gap at the top of the stairs where the
+    // player fell through between the last step and the floor slab.
+    const holeMinX = Math.min(holeX, holeX + dir * holeLen) - 0.05;
+    const holeMaxX = Math.max(holeX, holeX + dir * holeLen) + 0.05;
     const holeMinZ = holeZ - holeW / 2;
     const holeMaxZ = holeZ + holeW / 2;
 
@@ -275,7 +362,8 @@ export class World {
         maxX: stepX + STEP_D / 2,
         minZ: startZ - STAIR_W / 2,
         maxZ: startZ + STAIR_W / 2,
-        topY: stepTopY
+        topY: stepTopY,
+        creak: true, // wooden stair — creaks when walked on
       });
     }
   }
@@ -302,6 +390,31 @@ export class World {
     }
   }
 
+  // Faint volumetric light shafts below windows/doorways — semi-transparent
+  // cones that give interiors distinct light/shadow pools for stealth hiding.
+  _addLightShafts(x, z, w, d, h, accentColor) {
+    const wt = CONFIG.building.wallThick;
+    const halfW = w / 2;
+    const halfD = d / 2;
+    const shaftMat = new THREE.MeshBasicMaterial({
+      color: accentColor,
+      transparent: true,
+      opacity: 0.06,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    // One shaft per floor, near a window on the front wall.
+    const floors = Math.max(1, Math.floor(h / FLOOR_HEIGHT));
+    for (let f = 0; f < floors; f++) {
+      const y = f * FLOOR_HEIGHT + 0.5;
+      const wx = x + (this._rand() * 2 - 1) * (halfW * 0.6);
+      const shaft = new THREE.Mesh(new THREE.ConeGeometry(0.9, FLOOR_HEIGHT * 0.9, 8, 1, true), shaftMat);
+      shaft.position.set(wx, y + FLOOR_HEIGHT * 0.45, z + halfD - wt - 0.5);
+      shaft.rotation.x = Math.PI; // point down
+      this.scene.add(shaft);
+    }
+  }
+
   // Add glowing windows along the walls.
   _addWindows(x, z, w, d, h, windowMat) {
     const wt = CONFIG.building.wallThick;
@@ -311,7 +424,7 @@ export class World {
     const spacing = w / (count + 1);
     for (let i = 1; i <= count; i++) {
       const wx = x - halfW + spacing * i;
-      const wy = 2 + Math.random() * (h - 4);
+      const wy = 2 + this._rand() * (h - 4);
       // Front and back windows
       const winF = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.0, 0.1), windowMat);
       winF.position.set(wx, wy, z + halfD + 0.05);
@@ -324,7 +437,7 @@ export class World {
     const spacingZ = d / (count + 1);
     for (let i = 1; i <= count; i++) {
       const wz = z - halfD + spacingZ * i;
-      const wy = 2 + Math.random() * (h - 4);
+      const wy = 2 + this._rand() * (h - 4);
       const winL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.0, 1.2), windowMat);
       winL.position.set(x - halfW - 0.05, wy, wz);
       this.scene.add(winL);
@@ -341,8 +454,8 @@ export class World {
     let attempts = 0;
     while (placed < CONFIG.crateCount && attempts < 300) {
       attempts++;
-      const x = (Math.random() * 2 - 1) * (WORLD_HALF - 10);
-      const z = (Math.random() * 2 - 1) * (WORLD_HALF - 10);
+      const x = (this._rand() * 2 - 1) * (WORLD_HALF - 10);
+      const z = (this._rand() * 2 - 1) * (WORLD_HALF - 10);
       if (this._collides(x, z, 1.0)) continue;
       const mesh = new THREE.Mesh(crateGeo, crateMat);
       mesh.position.set(x, 0.8, z);
@@ -362,11 +475,11 @@ export class World {
     let attempts = 0;
     while (placed < CONFIG.barrierCount && attempts < 400) {
       attempts++;
-      const w = 3 + Math.random() * 4;
+      const w = 3 + this._rand() * 4;
       const h = 1.2;
       const d = 0.5;
-      const x = (Math.random() * 2 - 1) * (WORLD_HALF - 12);
-      const z = (Math.random() * 2 - 1) * (WORLD_HALF - 12);
+      const x = (this._rand() * 2 - 1) * (WORLD_HALF - 12);
+      const z = (this._rand() * 2 - 1) * (WORLD_HALF - 12);
       if (this._collides(x, z, 1.2)) continue;
       const geo = new THREE.BoxGeometry(w, h, d);
       const mesh = new THREE.Mesh(geo, barrierMat);
@@ -375,6 +488,69 @@ export class World {
       mesh.receiveShadow = true;
       this.scene.add(mesh);
       this.obstacles.push({ minX: x - w / 2, maxX: x + w / 2, minZ: z - d / 2, maxZ: z + d / 2, height: h, barrier: mesh });
+      placed++;
+    }
+  }
+
+  // Parked cars — striking them triggers a loud alarm that draws bots.
+  _buildCars() {
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x3a4a6a, metalness: 0.7, roughness: 0.3 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x1a1a2a, metalness: 0.5, roughness: 0.5 });
+    let placed = 0;
+    let attempts = 0;
+    while (placed < CONFIG.env.carCount && attempts < 300) {
+      attempts++;
+      const x = (this._rand() * 2 - 1) * (WORLD_HALF - 14);
+      const z = (this._rand() * 2 - 1) * (WORLD_HALF - 14);
+      if (this._collides(x, z, 1.6)) continue;
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.7, 4.4), bodyMat);
+      body.position.y = 0.55;
+      group.add(body);
+      const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.6, 2.2), darkMat);
+      cabin.position.set(0, 1.1, -0.2);
+      group.add(cabin);
+      // Wheels
+      const wheelGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.25, 10);
+      wheelGeo.rotateZ(Math.PI / 2);
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+      for (const [wx, wz] of [[-1.0, 1.4], [1.0, 1.4], [-1.0, -1.4], [1.0, -1.4]]) {
+        const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+        wheel.position.set(wx, 0.35, wz);
+        group.add(wheel);
+      }
+      group.position.set(x, 0, z);
+      group.rotation.y = this._rand() * Math.PI;
+      group.castShadow = true;
+      this.scene.add(group);
+      this.cars.push({ mesh: group, pos: new THREE.Vector3(x, 0, z), alarmed: false, timer: 0 });
+      this.obstacles.push({ minX: x - 1.4, maxX: x + 1.4, minZ: z - 2.4, maxZ: z + 2.4, height: 1.4, car: group });
+      placed++;
+    }
+  }
+
+  // Metallic dumpsters in back alleys — kicking them clangs loudly.
+  _buildTrashCans() {
+    const canMat = new THREE.MeshStandardMaterial({ color: 0x5a5a6a, metalness: 0.8, roughness: 0.4 });
+    let placed = 0;
+    let attempts = 0;
+    while (placed < CONFIG.env.trashCanCount && attempts < 300) {
+      attempts++;
+      const x = (this._rand() * 2 - 1) * (WORLD_HALF - 12);
+      const z = (this._rand() * 2 - 1) * (WORLD_HALF - 12);
+      if (this._collides(x, z, 0.8)) continue;
+      const group = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.45, 1.1, 12), canMat);
+      body.position.y = 0.55;
+      group.add(body);
+      const lid = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.08, 12), canMat);
+      lid.position.y = 1.15;
+      group.add(lid);
+      group.position.set(x, 0, z);
+      group.castShadow = true;
+      this.scene.add(group);
+      this.trashCans.push({ mesh: group, pos: new THREE.Vector3(x, 0, z), alarmed: false, timer: 0 });
+      this.obstacles.push({ minX: x - 0.6, maxX: x + 0.6, minZ: z - 0.6, maxZ: z + 0.6, height: 1.2, trash: group });
       placed++;
     }
   }
@@ -437,9 +613,9 @@ export class World {
     this.rainGeo = new THREE.BufferGeometry();
     const positions = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
-      positions[i * 3] = (Math.random() * 2 - 1) * WORLD_HALF * 2;
-      positions[i * 3 + 1] = Math.random() * 60;
-      positions[i * 3 + 2] = (Math.random() * 2 - 1) * WORLD_HALF * 2;
+      positions[i * 3] = (this._rand() * 2 - 1) * WORLD_HALF * 2;
+      positions[i * 3 + 1] = this._rand() * 60;
+      positions[i * 3 + 2] = (this._rand() * 2 - 1) * WORLD_HALF * 2;
     }
     this.rainGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     this.rainMat = new THREE.PointsMaterial({
@@ -453,12 +629,67 @@ export class World {
     this.scene.add(this.rainParticles);
   }
 
+  // Dynamic ground reflection that tracks the sun/spotlight position.
+  // Instead of a static blinding mirror, the reflection is a soft pool of
+  // light that moves with the sweeping spotlight — so the glare always has a
+  // corresponding light source and casts moving highlights across the map.
+  _buildReflection() {
+    // A large, very soft radial gradient plane that follows the sun's ground
+    // position. It reads as "wet asphalt reflecting the spotlight" without
+    // the harsh mirror finish.
+    const geo = new THREE.PlaneGeometry(60, 60);
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(255, 240, 200, 0.55)');
+    grad.addColorStop(0.4, 'rgba(255, 230, 180, 0.22)');
+    grad.addColorStop(1, 'rgba(255, 230, 180, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 128, 128);
+    const tex = new THREE.CanvasTexture(canvas);
+    this.reflectionMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this.reflection = new THREE.Mesh(geo, this.reflectionMat);
+    this.reflection.rotation.x = -Math.PI / 2;
+    this.reflection.position.y = 0.03;
+    this.reflection.visible = false; // only visible when the sun is up
+    this.scene.add(this.reflection);
+  }
+
+  // Update the reflection pool to track the sun's ground position.
+  _updateReflection() {
+    if (!this.reflection) return;
+    const angle = ((this.hour - 6) / 24) * Math.PI * 2;
+    const dayFactor = Math.max(0, Math.sin(angle));
+    // The sun's ground target is where the spotlight points.
+    const tx = this.sun.target.position.x;
+    const tz = this.sun.target.position.z;
+    this.reflection.position.set(tx, 0.03, tz);
+    // Fade in/out with daylight; stronger when raining (wet = more glare).
+    const wetBoost = this.isRaining ? 1.4 : 1.0;
+    this.reflection.visible = dayFactor > 0.1;
+    this.reflectionMat.opacity = 0.9 * dayFactor * wetBoost;
+  }
+
   setRaining(on) {
     this.isRaining = on;
     if (this.rainParticles) this.rainParticles.visible = on;
     if (this.scene.fog) {
       this.scene.fog.near = on ? 40 : 60;
       this.scene.fog.far = on ? 160 : 260;
+    }
+    // Wet asphalt: lerp ground roughness down so neon reflects.
+    if (this.groundMat) {
+      this.groundMat.roughness = on ? 0.3 : 0.82;
+      this.groundMat.metalness = on ? 0.3 : 0.15;
+      this.groundMat.needsUpdate = true;
     }
   }
 
@@ -516,6 +747,19 @@ export class World {
       }
     }
     return groundY;
+  }
+
+  // True if the player's feet are on a creaky wooden stair surface.
+  isOnCreakSurface(x, z, feetY) {
+    const step = CONFIG.building.stepHeight;
+    const eps = 0.15;
+    for (const p of this.platforms) {
+      if (!p.creak) continue;
+      if (x > p.minX && x < p.maxX && z > p.minZ && z < p.maxZ) {
+        if (Math.abs(p.topY - feetY) < step + eps) return true;
+      }
+    }
+    return false;
   }
 
   // Check if there's a clear line of sight between two points (at chest height).
@@ -576,14 +820,23 @@ export class World {
     const hoursPerSec = 24 / cycle;
     this.hour = (CONFIG.dayNight.startHour + this.clock.getElapsedTime() * hoursPerSec) % 24;
 
+    // Environmental timers (fuse boxes, car alarms, trash cans).
+    this.updateEnv(dt);
+
     // Spotlight behavior: if a bot is revealed, lock onto it; otherwise sweep.
     if (this.spotTarget && this.spotTarget.alive && this.spotTarget.revealed > 0) {
       // Lock the spotlight onto the revealed bot.
       this.sun.target.position.copy(this.spotTarget.pos);
       this.spotLockTimer = this.spotTarget.revealed;
+    } else if (this.spotLockPos && this.spotLockTimer > 0) {
+      // Lock the spotlight onto a revealed position (e.g. gunfire).
+      this.spotLockTimer -= dt;
+      this.sun.target.position.copy(this.spotLockPos);
+      if (this.spotLockTimer <= 0) this.spotLockPos = null;
     } else {
       // No target — resume random sweeping.
       this.spotTarget = null;
+      this.spotLockPos = null;
       this.spotAngle += CONFIG.spotlight.sweepSpeed * dt;
       const sweepX = Math.cos(this.spotAngle) * 40;
       const sweepZ = Math.sin(this.spotAngle) * 40;
@@ -594,6 +847,9 @@ export class World {
 
     // Sun disc follows the spotlight position (high in the sky).
     this.sunDisc.position.set(this.sun.target.position.x, 60, this.sun.target.position.z);
+
+    // Reflection pool tracks the sun's ground position (moving glare).
+    this._updateReflection();
 
     // Day/night intensity — keep a bright floor so it's never too dark (Duke Nukem style)
     const angle = ((this.hour - 6) / 24) * Math.PI * 2;
@@ -630,6 +886,111 @@ export class World {
   // Lock the spotlight onto a revealed bot (or clear it).
   revealBot(bot) {
     this.spotTarget = bot || null;
+  }
+
+  // True when it's dark enough that infected visors glow visibly.
+  // Day factor is sin((hour-6)/24 * 2pi); night is when it drops below 0.35.
+  isNight() {
+    const angle = ((this.hour - 6) / 24) * Math.PI * 2;
+    const dayFactor = Math.max(0, Math.sin(angle));
+    return dayFactor < 0.35;
+  }
+
+  // Lock the spotlight onto an arbitrary position (e.g. gunfire) for a duration.
+  revealPosition(pos, duration) {
+    this.spotTarget = null;
+    this.spotLockPos = pos ? pos.clone() : null;
+    this.spotLockTimer = duration || 0;
+  }
+
+  // --- Environmental sabotage & distractions ---
+
+  // Interact with a fuse box near the player. Cuts the building's interior
+  // lights for a window, giving an evasion opportunity. Returns true if used.
+  interactFuseBox(playerPos) {
+    for (const fb of this.fuseBoxes) {
+      if (fb.cut) continue;
+      if (fb.pos.distanceTo(playerPos) < 2.2) {
+        fb.cut = true;
+        fb.timer = CONFIG.env.fuseCutDuration;
+        fb.light.material.color.setHex(0xff3b3b); // red = power cut
+        // Darken the building's interior lights (windows + floor emissive).
+        this._setBuildingLights(fb.building, false);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Trigger a car alarm near the player. Returns true if a car was alarmed.
+  triggerCarAlarm(playerPos) {
+    for (const car of this.cars) {
+      if (car.alarmed) continue;
+      if (car.pos.distanceTo(playerPos) < 2.5) {
+        car.alarmed = true;
+        car.timer = CONFIG.env.alarmDuration;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Kick a trash can near the player. Returns true if one was kicked.
+  triggerTrashCan(playerPos) {
+    for (const can of this.trashCans) {
+      if (can.alarmed) continue;
+      if (can.pos.distanceTo(playerPos) < 2.0) {
+        can.alarmed = true;
+        can.timer = CONFIG.env.alarmDuration;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Darken / restore a building's interior lights (windows + floor).
+  _setBuildingLights(building, on) {
+    if (!building) return;
+    // Windows are MeshBasicMaterial with accent colors — dim them.
+    const dim = on ? 1 : 0.15;
+    this.scene.traverse((obj) => {
+      if (obj.material && obj.material.isMeshBasicMaterial && obj.material.color) {
+        // Only touch window-like emissive planes near this building.
+        const dx = obj.position.x - building.x;
+        const dz = obj.position.z - building.z;
+        if (Math.abs(dx) < building.w / 2 + 1 && Math.abs(dz) < building.d / 2 + 1) {
+          if (obj.geometry && obj.geometry.type === 'PlaneGeometry') {
+            obj.material.color.multiplyScalar(on ? 1 / dim : dim);
+          }
+        }
+      }
+    });
+  }
+
+  // Update fuse box timers, car alarms, trash can timers.
+  updateEnv(dt) {
+    for (const fb of this.fuseBoxes) {
+      if (fb.cut) {
+        fb.timer -= dt;
+        if (fb.timer <= 0) {
+          fb.cut = false;
+          fb.light.material.color.setHex(0x3bff8a); // green = powered
+          this._setBuildingLights(fb.building, true);
+        }
+      }
+    }
+    for (const car of this.cars) {
+      if (car.alarmed) {
+        car.timer -= dt;
+        if (car.timer <= 0) car.alarmed = false;
+      }
+    }
+    for (const can of this.trashCans) {
+      if (can.alarmed) {
+        can.timer -= dt;
+        if (can.timer <= 0) can.alarmed = false;
+      }
+    }
   }
 
   dispose() {

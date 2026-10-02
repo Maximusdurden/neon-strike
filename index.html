@@ -12,10 +12,27 @@
       }
     }
   </script>
+  <!-- PeerJS for WebRTC multiplayer (zero-build, CDN) -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
   <!-- Three.js canvas mounts here -->
   <div id="app"></div>
+
+  <!-- Chromatic aberration filter for adrenaline tunnel vision (panic FOV) -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <filter id="chromatic-aberration">
+        <feGaussianBlur in="SourceGraphic" id="ca-fe" stdDeviation="0.5" result="blur" />
+        <feOffset in="blur" dx="2" dy="0" result="offsetR" />
+        <feOffset in="blur" dx="-2" dy="0" result="offsetB" />
+        <feColorMatrix in="offsetR" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.6 0" result="red" />
+        <feColorMatrix in="offsetB" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 0.6 0" result="blue" />
+        <feBlend in="red" in2="blue" mode="screen" result="ca" />
+        <feComposite in="ca" in2="SourceGraphic" operator="over" />
+      </filter>
+    </defs>
+  </svg>
 
   <!-- HUD -->
   <div id="hud" class="hidden">
@@ -37,6 +54,18 @@
       <div id="health-text">100</div>
     </div>
 
+    <!-- Population / infection stats -->
+    <div id="pop-stats">
+      <div id="npc-counter">
+        <span id="npc-icon">👥</span>
+        <span id="npc-count">0</span> NPCS
+      </div>
+      <div id="infection-counter" class="hidden">
+        <span id="infection-icon">☣</span>
+        <span id="infection-count">0</span> INFECTED
+      </div>
+    </div>
+
     <div id="top-right">
       <div id="ammo">30 / 90</div>
       <div id="weapon-name">RIFLE</div>
@@ -51,18 +80,6 @@
     </div>
 
     <div id="kill-feed"></div>
-
-    <!-- Mission objective -->
-    <div id="objective">
-      <div id="objective-label">OBJECTIVE</div>
-      <div id="objective-text"></div>
-    </div>
-
-    <!-- Infection counter -->
-    <div id="infection-counter" class="hidden">
-      <span id="infection-icon">☣</span>
-      <span id="infection-count">0</span> INFECTED
-    </div>
 
     <!-- Mission banner -->
     <div id="banner" class="hidden">
@@ -112,12 +129,64 @@
     <h1>NEON STRIKE</h1>
     <p class="subtitle">A procedural 3D shooter</p>
     <div id="menu-buttons">
-      <button id="btn-start">START</button>
+      <button id="btn-start">SOLO SURVIVAL</button>
+      <button id="btn-mode-ai">1V1 VS AI HUNTER</button>
+      <button id="btn-mode-pvp">1V1 VS FRIEND (PVP)</button>
+      <button id="btn-mode-coop">2-PLAYER CO-OP</button>
       <button id="btn-music">MUSIC: ON</button>
       <button id="btn-sfx">SFX: ON</button>
+      <button id="btn-options">OPTIONS</button>
     </div>
     <p class="hint">WASD move · Mouse look · Click fire · Shift sprint · Space jump · R reload · 1-4 / scroll switch weapons</p>
     <p class="hint mobile-hint">Touch: left joystick to move, drag right to look, FIRE to shoot</p>
+  </div>
+
+  <!-- Multiplayer lobby (host / join) -->
+  <div id="lobby" class="hidden">
+    <h2 id="lobby-title">MULTIPLAYER</h2>
+    <div id="lobby-host" class="hidden">
+      <p class="kb-hint">Share this room code with your friend:</p>
+      <div id="room-code">----</div>
+      <p id="lobby-status">Waiting for player to join...</p>
+    </div>
+    <div id="lobby-join" class="hidden">
+      <p class="kb-hint">Enter your friend's 4-letter room code:</p>
+      <input id="lobby-code-input" maxlength="4" placeholder="ABCD" autocomplete="off" autofocus>
+      <button id="btn-lobby-join">JOIN</button>
+    </div>
+    <button id="btn-lobby-back">BACK</button>
+  </div>
+
+  <!-- Options -->
+  <div id="options" class="hidden">
+    <h2>OPTIONS</h2>
+    <div class="option-row">
+      <label for="opt-npcs">Starting NPCs</label>
+      <input type="range" id="opt-npcs" min="5" max="60" step="1" value="20">
+      <span id="opt-npcs-val">20</span>
+    </div>
+    <div class="option-row">
+      <label for="opt-aggression">Infection Aggression</label>
+      <select id="opt-aggression">
+        <option value="docile">Docile</option>
+        <option value="meh" selected>Meh</option>
+        <option value="aggressive">Aggressive</option>
+        <option value="insane">Insane</option>
+      </select>
+    </div>
+    <button id="btn-keybinds">KEYBINDS</button>
+    <button id="btn-options-back">BACK</button>
+  </div>
+
+  <!-- Keybinds -->
+  <div id="keybinds" class="hidden">
+    <h2>KEY BINDINGS</h2>
+    <p class="kb-hint">Click a binding, then press a key to remap it. ESC cancels.</p>
+    <div id="kb-list"></div>
+    <div class="kb-actions">
+      <button id="btn-kb-reset">RESET TO DEFAULTS</button>
+      <button id="btn-kb-back">BACK</button>
+    </div>
   </div>
 
   <!-- Game over -->
@@ -126,6 +195,22 @@
     <div id="gameover-reason" class="hidden"></div>
     <div id="final-score">SCORE: 0</div>
     <div id="final-kills">KILLS: 0</div>
+    <div id="final-time">TIME SURVIVED: 0 days</div>
+    <div id="final-playtime">PLAY TIME: 0:00</div>
+    <div id="best-stats">
+      <span id="best-score">BEST SCORE: 0</span>
+      <span id="best-kills">BEST KILLS: 0</span>
+      <span id="best-time">BEST TIME: 0 days</span>
+    </div>
+    <div id="highscore-entry" class="hidden">
+      <label for="initials-input">NEW HIGH SCORE! ENTER INITIALS:</label>
+      <input id="initials-input" maxlength="3" placeholder="AAA" autocomplete="off">
+      <button id="btn-save-score">SAVE</button>
+    </div>
+    <div id="highscore-list" class="hidden">
+      <h3>HIGH SCORES</h3>
+      <ol id="highscore-items"></ol>
+    </div>
     <button id="btn-restart">PLAY AGAIN</button>
   </div>
 
@@ -133,8 +218,10 @@
   <div id="pause" class="hidden">
     <h2>PAUSED</h2>
     <button id="btn-resume">RESUME</button>
+    <button id="btn-pause-options">OPTIONS</button>
+    <button id="btn-pause-exit">EXIT TO MENU</button>
   </div>
 
-  <script type="module" src="js/main.js?v=20260929p"></script>
+  <script type="module" src="js/main.js?v=20261001i"></script>
 </body>
 </html>

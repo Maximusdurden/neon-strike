@@ -10,6 +10,9 @@ export class Pickups {
     this.audio = audio;
     this.onPickup = onPickup || null;
     this.pickups = [];
+    // Render-only clients (multiplayer) don't collect locally — they send a
+    // 'collect' action to the host, which resolves and broadcasts the result.
+    this.renderOnly = false;
     this._buildMeshes();
   }
 
@@ -29,6 +32,8 @@ export class Pickups {
   }
 
   spawnAll() {
+    // Clear any leftover pickups from a previous run (restart safety).
+    this.clearAll();
     for (let i = 0; i < CONFIG.pickupCount; i++) {
       this.spawnPickup();
     }
@@ -42,12 +47,39 @@ export class Pickups {
     }
   }
 
+  // Remove all pickups from the scene (called on restart).
+  clearAll() {
+    for (const p of this.pickups) {
+      if (p.mesh.parent) this.scene.remove(p.mesh);
+      if (p.beam && p.beam.parent) this.scene.remove(p.beam);
+    }
+    this.pickups = [];
+  }
+
+  // Add a tall glowing light beam above a pickup so it's easy to spot from
+  // across the map (the whole point of loot is that you can FIND it).
+  _addBeam(x, z, color) {
+    const beamGeo = new THREE.CylinderGeometry(0.12, 0.12, 14, 8, 1, true);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.28,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.set(x, 8, z);
+    this.scene.add(beam);
+    return beam;
+  }
+
   // Spawn a weapon pickup (gun or machete) on the map.
   spawnWeaponPickup(key) {
     let x, z, attempts = 0;
+    const rnd = this.world._rand || Math.random;
     do {
-      x = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
-      z = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
+      x = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
+      z = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
       attempts++;
     } while (this.world.collides(x, z, 0.6) && attempts < 50);
 
@@ -81,6 +113,7 @@ export class Pickups {
       type: 'weapon',
       weaponKey: key,
       mesh: group,
+      beam: this._addBeam(x, z, 0x00e5ff),
       pos: new THREE.Vector3(x, 1.2, z),
       active: true,
       respawnTimer: 0,
@@ -88,11 +121,12 @@ export class Pickups {
   }
 
   spawnPickup() {
-    const type = Math.random() < 0.5 ? 'health' : 'ammo';
+    const rnd = this.world._rand || Math.random;
+    const type = rnd() < 0.5 ? 'health' : 'ammo';
     let x, z, attempts = 0;
     do {
-      x = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
-      z = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
+      x = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
+      z = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
       attempts++;
     } while (this.world.collides(x, z, 0.6) && attempts < 50);
 
@@ -106,6 +140,7 @@ export class Pickups {
     this.pickups.push({
       type,
       mesh,
+      beam: this._addBeam(x, z, type === 'health' ? 0x3bff8a : 0xffd166),
       pos: new THREE.Vector3(x, 1.2, z),
       active: true,
       respawnTimer: 0,
@@ -115,9 +150,10 @@ export class Pickups {
   // Spawn a melee weapon pickup (knife or machete).
   spawnMeleePickup(key) {
     let x, z, attempts = 0;
+    const rnd = this.world._rand || Math.random;
     do {
-      x = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
-      z = (Math.random() * 2 - 1) * (CONFIG.worldSize - 15);
+      x = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
+      z = (rnd() * 2 - 1) * (CONFIG.worldSize - 15);
       attempts++;
     } while (this.world.collides(x, z, 0.6) && attempts < 50);
 
@@ -137,6 +173,7 @@ export class Pickups {
       type: 'melee',
       meleeKey: key,
       mesh: group,
+      beam: this._addBeam(x, z, 0x00e5ff),
       pos: new THREE.Vector3(x, 1.2, z),
       active: true,
       respawnTimer: 0,
@@ -156,6 +193,7 @@ export class Pickups {
     this.pickups.push({
       type,
       mesh,
+      beam: this._addBeam(pos.x, pos.z, type === 'health' ? 0x3bff8a : 0xffd166),
       pos: pos.clone(),
       active: true,
       respawnTimer: 0,
@@ -166,10 +204,14 @@ export class Pickups {
   update(dt, player, weapon) {
     for (const p of this.pickups) {
       if (!p.active) {
+        // Render-only clients don't run respawn timers — the host broadcasts
+        // when a pickup comes back.
+        if (this.renderOnly) continue;
         p.respawnTimer -= dt;
         if (p.respawnTimer <= 0) {
           p.active = true;
           p.mesh.visible = true;
+          if (p.beam) p.beam.visible = true;
         }
         continue;
       }
@@ -177,9 +219,13 @@ export class Pickups {
       p.mesh.rotation.y += dt * 2;
       p.mesh.position.y = 1.2 + Math.sin(performance.now() / 400) * 0.15;
 
-      // Collect
+      // Collect — render-only clients send the request to the host instead.
       const dist = p.pos.distanceTo(player.pos);
       if (dist < 1.5 && player.alive) {
+        if (this.renderOnly) {
+          if (this.onCollect) this.onCollect(p);
+          continue;
+        }
         let label = null;
         if (p.type === 'health') {
           player.heal(CONFIG.pickup.healthAmount);
@@ -196,6 +242,7 @@ export class Pickups {
         if (this.onPickup && label) this.onPickup(label);
         p.active = false;
         p.mesh.visible = false;
+        if (p.beam) p.beam.visible = false;
         p.respawnTimer = p.isDrop ? 9999 : CONFIG.pickup.respawnTime;
       }
     }

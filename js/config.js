@@ -34,6 +34,27 @@ export const CONFIG = {
     maxHealth: 100,
     regenDelay: 4.0,       // seconds after damage before regen
     regenRate: 12,         // hp per second
+    damageInterval: 0.8,   // min seconds between damage ticks (i-frames)
+    // Shove / tackle (non-lethal physical push)
+    shove: {
+      range: 2.0,          // cone reach
+      pushForce: 1.5,      // meters pushed back
+      cooldown: 0.6,       // seconds between shoves
+      coneDot: 0.6,        // forward cone threshold (cos of half-angle)
+    },
+    // Q/E peek-lean
+    lean: {
+      maxOffset: 0.35,     // meters of horizontal camera shift
+      maxTilt: 0.12,       // radians of Z-axis roll
+      speed: 10,           // lerp speed
+    },
+    // Adrenaline tunnel vision (threat > 0.75)
+    adrenaline: {
+      threatThreshold: 0.75,
+      fovExpansion: 9,     // degrees added to base FOV
+      baseFov: 75,
+      maxFov: 84,
+    },
   },
 
   // Hide countdown phase
@@ -41,6 +62,18 @@ export const CONFIG = {
     duration: 15,          // seconds to hide before the deathmatch starts
     botsPatrol: true,      // bots patrol (don't attack) during hide phase
   },
+
+  // Co-op revive system: when a player is downed, the partner has a window to
+  // revive them by standing close and pressing interact (F).
+  coop: {
+    reviveWindow: 15,      // seconds a downed player waits before bleeding out
+    reviveRange: 3.0,      // meters the partner must stand within
+    reviveTime: 2.5,       // seconds of holding interact to revive
+  },
+
+  // Starting population — how many NPCs are on the map when the hunt begins.
+  // More NPCs make the infected harder to spot. Adjustable via the options slider.
+  startingNPCs: 20,
 
   // Weapons (multiple, switchable with 1-4 or scroll wheel)
   weapons: {
@@ -174,9 +207,27 @@ export const CONFIG = {
     initialInfected: 1,    // how many start infected
     infectRange: 2.5,      // distance to infect another
     infectCooldown: 3.0,   // seconds between infections
-    spreadBoost: 0.15,     // infection speed boost per infected NPC
+    spreadBoost: 0.05,     // infection speed boost per infected NPC (mild snowball)
     infectedSpeed: 2.0,    // speed multiplier for infected (faster than player)
     infectedDamage: 15,    // melee damage infected deal to player
+    // Global spread cap: max NEW infections per second across ALL infected.
+    // This is the real brake on the snowball — no matter how many infected
+    // exist, the map can't be wiped in seconds.
+    maxInfectionsPerSec: {
+      docile: 0.05,        // ~1 new infection per 20s
+      meh: 0.15,           // ~1 per 7s
+      aggressive: 0.35,    // ~1 per 3s
+      insane: 0.6,         // ~1 per 1.7s
+    },
+    // Aggression presets — how aggressively infected spread to others.
+    // Each preset scales the infection cooldown and range.
+    aggressionPresets: {
+      docile:   { cooldownMult: 2.0, rangeMult: 0.8, seekRange: 0, seekSpeed: 1.0 },   // rarely infects
+      meh:      { cooldownMult: 1.0, rangeMult: 1.0, seekRange: 0, seekSpeed: 1.2 },   // default
+      aggressive: { cooldownMult: 0.6, rangeMult: 1.3, seekRange: 15, seekSpeed: 1.3 }, // actively seeks nearby
+      insane:   { cooldownMult: 0.4, rangeMult: 1.6, seekRange: 25, seekSpeed: 1.6 }, // hunts to infect
+    },
+    aggression: 'meh',     // current preset: docile | meh | aggressive | insane
   },
 
   // Pickups
@@ -214,6 +265,35 @@ export const CONFIG = {
   dayNight: {
     cycleMinutes: 2.0,     // full day/night cycle length
     startHour: 9,          // starting hour of day (0-24)
+  },
+
+  // Environmental sabotage & distractions
+  env: {
+    fuseBoxCount: 6,       // breaker boxes on ground floors of buildings
+    fuseCutDuration: 12,   // seconds lights stay out after cutting
+    carCount: 8,           // parked cars that can be alarmed
+    trashCanCount: 10,     // metallic dumpsters that clang when kicked
+    alarmRadius: 22,       // how far a car alarm / trash clang draws bots
+    alarmDuration: 4,      // seconds the alarm rings
+  },
+
+  // Creaky stairs — wooden risers that creak when walked on
+  creak: {
+    interval: 0.9,         // min seconds between creaks while moving on stairs
+    radius: 8,             // noise radius of a creak (alerts nearby bots)
+  },
+
+  // Infected proximity whisper (Patient Zero tell)
+  whisper: {
+    range: 6,              // meters — within this, the hum plays
+    volume: 0.12,          // sub-bass beating volume
+  },
+
+  // Infected cold-breath particle tell
+  breath: {
+    intervalMin: 8,        // seconds between vapor puffs
+    intervalMax: 12,
+    range: 0.35,           // puff spawn offset from head
   },
 
   // Spotlight reveal: when a bot fires, it's briefly revealed through walls.

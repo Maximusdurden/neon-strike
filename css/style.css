@@ -182,39 +182,42 @@ html, body {
   100% { opacity: 0; }
 }
 
-/* Mission objective */
-#objective {
+/* Population / infection stats (top-left, below health) */
+#pop-stats {
   position: absolute;
-  top: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  text-align: center;
-  background: var(--panel);
-  padding: 8px 18px;
-  border-radius: 6px;
-  border: 1px solid rgba(0,229,255,0.3);
+  top: 52px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-#objective-label {
-  font-size: 10px;
-  letter-spacing: 3px;
-  color: var(--accent);
-}
-#objective-text {
-  font-size: 14px;
-  font-weight: 700;
-  margin-top: 2px;
-}
-
-/* Infection counter */
-#infection-counter {
-  position: absolute;
-  top: 16px;
-  right: 16px;
+#npc-counter {
   display: flex;
   align-items: center;
   gap: 6px;
   background: var(--panel);
-  padding: 8px 14px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(0,229,255,0.3);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+#npc-icon {
+  font-size: 15px;
+}
+#npc-count {
+  color: var(--accent);
+}
+
+/* Infection counter */
+#infection-counter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel);
+  padding: 6px 12px;
   border-radius: 6px;
   border: 1px solid rgba(0,255,136,0.4);
   font-size: 13px;
@@ -529,9 +532,224 @@ button:hover {
 #menu .hint { color: var(--muted); font-size: 13px; max-width: 480px; line-height: 1.6; }
 .mobile-hint { display: none; }
 
+/* Options screen */
+#options {
+  position: fixed;
+  inset: 0;
+  z-index: 21;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: radial-gradient(ellipse at center, rgba(10,14,20,0.85), rgba(5,8,12,0.97));
+  text-align: center;
+}
+#options h2 {
+  font-size: 40px;
+  letter-spacing: 4px;
+  color: var(--accent);
+}
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.option-row label {
+  min-width: 140px;
+  text-align: right;
+  letter-spacing: 1px;
+}
+.option-row input[type="range"] {
+  width: 220px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.option-row span {
+  min-width: 32px;
+  color: var(--accent);
+  font-weight: 800;
+}
+.option-row select {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 2px solid var(--accent);
+  background: var(--panel);
+  color: var(--accent);
+  cursor: pointer;
+  letter-spacing: 1px;
+}
+
+/* Keybinds screen */
+#keybinds {
+  position: fixed;
+  inset: 0;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: radial-gradient(ellipse at center, rgba(10,14,20,0.92), rgba(5,8,12,0.98));
+  text-align: center;
+}
+#keybinds h2 {
+  font-size: 36px;
+  letter-spacing: 4px;
+  color: var(--accent);
+}
+.kb-hint {
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+#kb-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  gap: 8px 24px;
+  max-height: 55vh;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+.kb-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--panel);
+}
+.kb-row .kb-action {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: left;
+}
+.kb-row .kb-key {
+  min-width: 90px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s;
+}
+.kb-row .kb-key:hover {
+  background: var(--accent);
+  color: #0a0e14;
+}
+.kb-row .kb-key.listening {
+  border-color: var(--accent2);
+  color: var(--accent2);
+  background: rgba(255,45,120,0.15);
+  animation: kb-pulse 0.8s infinite alternate;
+}
+.kb-row .kb-key.conflict {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+@keyframes kb-pulse {
+  from { box-shadow: 0 0 4px rgba(255,45,120,0.4); }
+  to { box-shadow: 0 0 14px rgba(255,45,120,0.9); }
+}
+.kb-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+}
+.kb-actions button {
+  padding: 10px 28px;
+  font-size: 15px;
+}
+
+/* Multiplayer lobby */
+#lobby {
+  position: fixed;
+  inset: 0;
+  z-index: 23;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: radial-gradient(ellipse at center, rgba(10,14,20,0.92), rgba(5,8,12,0.98));
+  text-align: center;
+}
+#lobby h2 {
+  font-size: 36px;
+  letter-spacing: 4px;
+  color: var(--accent);
+}
+#room-code {
+  font-size: 56px;
+  font-weight: 900;
+  letter-spacing: 14px;
+  color: var(--accent2);
+  background: var(--panel);
+  border: 2px solid var(--accent2);
+  border-radius: 10px;
+  padding: 10px 24px;
+  text-shadow: 0 0 20px rgba(255,45,120,0.5);
+}
+#lobby-status {
+  color: var(--muted);
+  font-size: 15px;
+  letter-spacing: 1px;
+}
+#lobby-code-input {
+  font-family: inherit;
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 10px;
+  text-align: center;
+  text-transform: uppercase;
+  width: 200px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 2px solid var(--accent);
+  background: var(--panel);
+  color: var(--accent);
+  outline: none;
+}
+#lobby-code-input:focus { box-shadow: 0 0 12px rgba(0,229,255,0.5); }
+
 #gameover h2 { font-size: 48px; color: var(--danger); letter-spacing: 4px; }
 #gameover div { font-size: 20px; color: var(--text); }
 #gameover #final-score { color: var(--accent); font-weight: 800; }
+#gameover #final-time { color: var(--accent2); font-weight: 700; }
+#gameover #final-playtime { color: var(--muted); font-weight: 700; }
+#best-stats {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+#best-stats span {
+  background: var(--panel);
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+#best-stats #best-score { color: var(--accent); }
+#best-stats #best-kills { color: var(--accent2); }
+#best-stats #best-time { color: var(--ok); }
 #gameover #gameover-reason {
   color: var(--danger);
   font-size: 22px;
@@ -539,6 +757,63 @@ button:hover {
   margin-top: 8px;
   text-shadow: 0 0 10px rgba(255,0,0,0.5);
 }
+#highscore-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+#highscore-entry label {
+  font-size: 14px;
+  letter-spacing: 2px;
+  color: var(--accent2);
+  font-weight: 700;
+}
+#initials-input {
+  font-family: inherit;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 8px;
+  text-align: center;
+  text-transform: uppercase;
+  width: 140px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 2px solid var(--accent2);
+  background: var(--panel);
+  color: var(--accent2);
+  outline: none;
+}
+#initials-input:focus { box-shadow: 0 0 12px rgba(255,45,120,0.5); }
+#highscore-list {
+  margin-top: 12px;
+  min-width: 260px;
+}
+#highscore-list h3 {
+  font-size: 16px;
+  letter-spacing: 3px;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+#highscore-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 15px;
+  color: var(--text);
+}
+#highscore-items li {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 3px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+#highscore-items li .hs-rank { color: var(--muted); font-weight: 700; }
+#highscore-items li .hs-initials { color: var(--accent2); font-weight: 800; letter-spacing: 2px; }
+#highscore-items li .hs-score { color: var(--accent); font-weight: 700; }
+#highscore-items li.hs-new { background: rgba(0,229,255,0.12); border-radius: 4px; }
 
 #pause h2 { font-size: 40px; letter-spacing: 4px; }
 

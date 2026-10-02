@@ -37,6 +37,10 @@ export class Weapon {
     this.tracers = [];
     this.tracerMat = new THREE.LineBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.9 });
 
+    // Authoritative mode: the host resolves hits. Render-only clients (multiplayer)
+    // send 'fire' actions to the host instead of damaging bots locally.
+    this.authoritative = true;
+
     // Zoom state (sniper scope)
     this.zoomed = false;
     this.zoomAmount = 0; // 0 = not zoomed, 1 = fully zoomed
@@ -298,9 +302,13 @@ export class Weapon {
     }
 
     if (best) {
+      // Render-only clients don't resolve melee locally — the host does.
+      if (!this.authoritative) return { type: 'miss' };
       this.bots.damage(best.bot, this.current.damage, this.player);
       this.effects.impact(best.bot.pos.clone().add(new THREE.Vector3(0, 1, 0)), dir);
-      this.audio.hit();
+      // Silent takedown: stab weapons get a fleshy slit/whoosh instead of a generic hit.
+      if (this.current.meleeType === 'stab') this.audio.stealthStab();
+      else this.audio.hit();
       return { type: 'bot', killed: !best.bot.alive };
     }
     return { type: 'miss' };
@@ -323,10 +331,48 @@ export class Weapon {
     this.zoomAmount += (target - this.zoomAmount) * Math.min(1, speed * dt);
     if (Math.abs(this.zoomAmount - target) < 0.01) this.zoomAmount = target;
 
-    const fov = this.baseFov + (this.zoomFov - this.baseFov) * this.zoomAmount;
+    // Base FOV respects the adrenaline tunnel-vision expansion set by main.js.
+    // The game stores the current dynamic FOV on the player for us to read.
+    const dynamicBase = this.player.camera.userData.dynamicFov || this.baseFov;
+    const fov = dynamicBase + (this.zoomFov - dynamicBase) * this.zoomAmount;
     if (Math.abs(this.player.camera.fov - fov) > 0.01) {
       this.player.camera.fov = fov;
       this.player.camera.updateProjectionMatrix();
+    }
+  }
+
+  // Sniper scope detection: while zoomed, infected bots under the crosshair
+  // get revealed (visor glow + reveal ring) so you can spot "the other" from a rooftop.
+  updateScopeDetection() {
+    // Only active when fully zoomed with the sniper.
+    if (this.current.name !== 'SNIPER' || this.zoomAmount < 0.9) return;
+
+    const origin = this.player.camera.getWorldPosition(new THREE.Vector3());
+    const dir = new THREE.Vector3();
+    this.player.camera.getWorldDirection(dir);
+
+    const bots = this.scene.userData.bots || [];
+    for (const bot of bots) {
+      if (!bot.alive || !bot.infected) continue;
+      const center = bot.pos.clone().add(new THREE.Vector3(0, 1.5, 0));
+      const toBot = center.clone().sub(origin);
+      const dist = toBot.length();
+      if (dist > 60) continue; // scope range
+      const t = toBot.clone().normalize().dot(dir);
+      // Narrow cone — must be looking almost directly at them.
+      if (t > 0.995) {
+        // Reveal the infected: visor glow + reveal ring + spotlight lock.
+        // The visor only glows at night — during the day the scope reveal is
+        // the pink ring + spotlight lock instead (visor stays dark).
+        bot.revealed = CONFIG.spotlight.revealDuration;
+        if (this.world.revealBot) this.world.revealBot(bot);
+        if (bot.parts && bot.parts.visor) {
+          const night = this.world.isNight ? this.world.isNight() : true;
+          bot.parts.visor.visible = night;
+          bot.parts.visor.material.color.setHex(0x00ff88);
+          bot.parts.visor.material.emissive.setHex(0x00ff88);
+        }
+      }
     }
   }
 
@@ -395,6 +441,8 @@ export class Weapon {
     // Apply hit
     if (hit) {
       if (hit.type === 'bot') {
+        // Render-only clients don't resolve hits locally — the host does.
+        if (!this.authoritative) return { type: 'bot', killed: false };
         this.bots.damage(hit.bot, this.current.damage, this.player);
         this.effects.impact(hit.bot.pos.clone().add(new THREE.Vector3(0, 1, 0)), dir);
         this.audio.hit();
@@ -466,6 +514,9 @@ export class Weapon {
   update(dt) {
     if (this.fireCooldown > 0) this.fireCooldown -= dt;
     this.updateZoom(dt);
+
+    // Sniper scope: reveal infected bots under the crosshair.
+    this.updateScopeDetection();
 
     // Melee swing animation
     if (this.meleeSwing > 0) {
